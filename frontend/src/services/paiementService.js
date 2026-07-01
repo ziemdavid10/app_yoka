@@ -28,3 +28,21 @@ export const fetchDebiteurs = async () => {
   if (!response.ok) throw new Error('Impossible de charger la liste des débiteurs.');
   return await response.json();
 };
+
+// NOUVEAU : Récupérer les dépenses
+export const fetchDepenses = async () => {
+  const response = await fetch(`${API_URL}/depenses`);
+  if (!response.ok) throw new Error('Erreur de chargement des charges.');
+  return await response.json();
+};
+
+// NOUVEAU : Créer une dépense
+export const saveDepense = async (depenseData) => {
+  const response = await fetch(`${API_URL}/depenses`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(depenseData)
+  });
+  if (!response.ok) throw new Error("Échec de l'enregistrement de la charge.");
+  return await response.json();
+};

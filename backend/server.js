@@ -11,8 +11,6 @@ const inscriptionRoutes = require('./src/routes/inscriptionRoutes');
 
 const paiementRoutes = require('./src/routes/paiementRoutes');
 
-
-
 dotenv.config();
 
 const app = express();
@@ -30,7 +28,7 @@ app.use('/api/paiements', paiementRoutes);
 
 // Route de secours / Test
 app.get('/', (req, res) => {
-  res.send('Serveur de gestion scolaire actif et opérationnel ! 🚀');
+  res.send('Serveur de gestion scolaire actif et opérationnel !');
 });
 
 // Lancement du serveur
