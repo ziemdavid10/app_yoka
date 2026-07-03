@@ -1,4 +1,7 @@
 import React, { useState, useEffect } from 'react';
+// Ajout des imports requis pour les graphiques Recharts
+import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+
 import { fetchEleves, saveEleve } from '../services/eleveService';
 import { fetchClasses, saveClasse } from '../services/classeService';
 import { fetchInscriptions, saveInscription } from '../services/inscriptionService';
@@ -12,7 +15,39 @@ import {
 } from '../services/paiementService';
 import { imprimerRecu } from '../utils/imprimerRecu';
 
-// Icônes Material Symbols (Google Fonts) — chargées une seule fois dans le document
+// Structure de données locale pour l'analyse financière mensuelle
+const localDataMock = [
+  { mois: 'Jan', Recettes: 1200000, Dépenses: 400000 },
+  { mois: 'Fév', Recettes: 1850000, Dépenses: 550000 },
+  { mois: 'Mar', Recettes: 900000,  Dépenses: 300000 },
+  { mois: 'Avr', Recettes: 2400000, Dépenses: 800000 },
+  { mois: 'Mai', Recettes: 1600000, Dépenses: 950000 },
+];
+
+// Sous-composant pour l'affichage des flux financiers de la caisse
+export const AdminLocalChart = ({ data = localDataMock }) => {
+  return (
+    <div style={{ width: '100%', height: 340, background: '#fff', padding: '20px', borderRadius: '12px', border: '1px solid #e6e9ef', marginTop: '24px' }}>
+      <h4 style={{ margin: '0 0 16px 0', fontSize: '14px', fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <span className="material-symbols-outlined" style={{ color: '#0369a1' }}>analytics</span>
+        Analyse Mensuelle : Flux de Trésorerie (F CFA)
+      </h4>
+      <ResponsiveContainer width="100%" height="85%">
+        <ComposedChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+          <XAxis dataKey="mois" stroke="#64748b" style={{ fontSize: '12px' }} />
+          <YAxis stroke="#64748b" style={{ fontSize: '12px' }} tickFormatter={(v) => `${v / 1000}k`} />
+          <Tooltip formatter={(value) => `${value.toLocaleString()} F CFA`} />
+          <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
+          <Bar dataKey="Recettes" fill="#0369a1" radius={[4, 4, 0, 0]} name="Recettes (Caisse)" />
+          <Line type="monotone" dataKey="Dépenses" stroke="#dc2626" strokeWidth={2.5} dot={{ r: 4 }} name="Charges Décaissées" />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
+  );
+};
+
+// Icônes Material Symbols (Google Fonts)
 const loadGoogleIconsFont = () => {
   if (document.getElementById('material-symbols-font')) return;
   const link = document.createElement('link');
@@ -47,7 +82,7 @@ const AdminDashboard = () => {
   const [message, setMessage] = useState({ text: '', isError: false });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState(''); // CORRECTION : Placé correctement à l'intérieur du composant
+  const [searchTerm, setSearchTerm] = useState(''); 
 
   // Listes de données
   const [eleves, setEleves] = useState([]);
@@ -212,14 +247,12 @@ const AdminDashboard = () => {
 
   const currentNav = NAV_ITEMS.find(n => n.key === activeTab);
 
-  // Filtre pour l'onglet Élèves
   const filteredEleves = eleves.filter(el => 
     el.nom.toLowerCase().includes(searchTerm.toLowerCase()) ||
     el.prenom.toLowerCase().includes(searchTerm.toLowerCase()) ||
     el.matricule.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  // Filtre pour la liste rouge des débiteurs (Accueil)
   const filteredDebiteurs = debiteurs.filter(d => 
     d.nom.toLowerCase().includes(searchTerm.toLowerCase()) ||
     d.prenom.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -343,6 +376,9 @@ const AdminDashboard = () => {
                     </div>
                   </div>
 
+                  {/* INTEGRATION DU COMPOSANT GRAPHIQUE CI-DESSOUS */}
+                  <AdminLocalChart data={localDataMock} />
+
                   <div className="yk-card" style={{ marginTop: '24px' }}>
                     <div className="yk-card-header">
                       <h3 className="yk-card-title yk-title-danger">
@@ -429,7 +465,7 @@ const AdminDashboard = () => {
                   </div>
 
                   <div className="yk-card yk-card-table">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
+                    <div style={{ display: 'flex', justifycontent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
                       <h3 className="yk-card-title" style={{ margin: 0, border: 'none', padding: 0 }}>
                         <Icon name="groups" /> Élèves globaux ({filteredEleves.length})
                       </h3>

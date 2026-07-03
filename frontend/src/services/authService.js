@@ -5,7 +5,7 @@ export const loginService = async (credentials) => {
     const response = await fetch(`${API_URL}/login`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/json' // Pas besoin d'Authorization ici
       },
       body: JSON.stringify(credentials),
     });
@@ -13,11 +13,10 @@ export const loginService = async (credentials) => {
     const data = await response.json();
 
     if (!response.ok) {
-      // Si le backend renvoie une erreur (401, 400, etc.), on la lève
       throw new Error(data.error || 'Une erreur est survenue lors de la connexion.');
     }
 
-    return data; // Contient le message, le token, et les infos user
+    return data;
   } catch (error) {
     throw error;
   }

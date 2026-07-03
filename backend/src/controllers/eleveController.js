@@ -1,49 +1,66 @@
 const db = require('../config/db');
+const { enregistrerAudit } = require('../utils/auditLogger');
 
-// Enregistrer un nouvel élève
 exports.creerEleve = async (req, res) => {
-  const { matricule, nom, prenom, date_naissance, genre } = req.body;
+  if (!req.user) {
+    return res.status(401).json({ error: "Action non autorisée. Profil utilisateur manquant." });
+  }
 
-  // 1. Validation de base des données reçues
+  const { matricule, nom, prenom, date_naissance, genre } = req.body;
+  const etablissement_id = req.user.etablissement_id;
+
   if (!matricule || !nom || !prenom || !date_naissance || !genre) {
     return res.status(400).json({ error: "Tous les champs sont obligatoires." });
   }
 
   try {
-    // 2. Requête SQL d'insertion
     const sql = `
-      INSERT INTO eleves (matricule, nom, prenom, date_naissance, genre) 
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO eleves (matricule, nom, prenom, date_naissance, genre, etablissement_id) 
+      VALUES (?, ?, ?, ?, ?, ?)
     `;
-    
-    // On exécute la requête de manière sécurisée (requête préparée contre les injections SQL)
-    const [result] = await db.execute(sql, [matricule, nom, prenom, date_naissance, genre]);
+    const [result] = await db.execute(sql, [matricule, nom, prenom, date_naissance, genre, etablissement_id]);
 
-    // 3. Réponse en cas de succès
+    // TRACE AUDIT
+    await enregistrerAudit(req, 'CREATION_ELEVE', `Nouvel élève inscrit : ${nom} ${prenom} (Matricule: ${matricule})`);
+
     return res.status(201).json({
       message: "Élève enregistré avec succès !",
       eleveId: result.insertId
     });
 
   } catch (error) {
-    console.error("Erreur serveur :", error);
-
-    // Gestion spécifique du doublon de matricule (Erreur MySQL 1062)
     if (error.code === 'ER_DUP_ENTRY') {
       return res.status(400).json({ error: "Ce matricule est déjà attribué à un autre élève." });
     }
-
-    return res.status(500).json({ error: "Une erreur est survenue lors de l'enregistrement." });
+    console.error("Erreur lors de l'enregistrement de l'élève :", error);
+    return res.status(500).json({ error: "Une erreur interne est survenue lors de l'enregistrement." });
   }
 };
 
-// Récupérer la liste de tous les élèves
 exports.getEleves = async (req, res) => {
+  if (!req.user) {
+    return res.status(401).json({ error: "Action non autorisée. Profil utilisateur manquant." });
+  }
+
   try {
-    const [rows] = await db.execute('SELECT * FROM eleves ORDER BY id DESC');
+    const isSuperAdmin = req.user.roles && req.user.roles.includes('SUPERADMIN');
+    let query = 'SELECT * FROM eleves';
+    let params = [];
+
+    if (!isSuperAdmin) {
+      query += ' WHERE etablissement_id = ?';
+      params.push(req.user.etablissement_id);
+    } else if (req.query.etablissement_id) {
+      query += ' WHERE etablissement_id = ?';
+      params.push(req.query.etablissement_id);
+    }
+
+    query += ' ORDER BY id DESC';
+
+    const [rows] = await db.execute(query, params);
     return res.status(200).json(rows);
   } catch (error) {
     console.error("Erreur lors de la récupération des élèves :", error);
-    return res.status(500).json({ error: "Une erreur est survenue sur le serveur." });
+    return res.status(500).json({ error: "Une erreur interne est survenue sur le serveur." });
   }
 };

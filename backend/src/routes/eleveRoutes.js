@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const eleveController = require('../controllers/eleveController');
+const { verifierAuth } = require('../middlewares/authMiddleware'); // <-- AJOUT
 
-// Route : POST http://localhost:5000/api/eleves
-router.post('/', eleveController.creerEleve);
-// Route : GET http://localhost:5000/api/eleves
-router.get('/', eleveController.getEleves);
+// Ajout de verifierAuth avant chaque méthode de contrôleur
+router.post('/', verifierAuth, eleveController.creerEleve);
+router.get('/', verifierAuth, eleveController.getEleves);
 
 module.exports = router;

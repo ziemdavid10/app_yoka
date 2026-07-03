@@ -1,17 +1,16 @@
 const express = require('express');
 const router = express.Router();
 const paiementController = require('../controllers/paiementController');
+const { verifierAuth } = require('../middlewares/authMiddleware'); // <-- AJOUT
 
-// Routes pour les statistiques et les débiteurs
-router.get('/stats', paiementController.getStatsFinancieres);
-router.get('/debiteurs', paiementController.getDebiteurs);
+// Sécurisation de toutes les routes de paiement
+router.get('/stats', verifierAuth, paiementController.getStatsFinancieres);
+router.get('/debiteurs', verifierAuth, paiementController.getDebiteurs);
+router.post('/', verifierAuth, paiementController.savePaiement);
+router.get('/', verifierAuth, paiementController.getPaiements);
 
-// CORRECTION : Utilisation de savePaiement au lieu d'enregistrerPaiement
-router.post('/', paiementController.savePaiement);
-router.get('/', paiementController.getPaiements);
-
-// Nouvelles routes pour les charges / dépenses
-router.post('/depenses', paiementController.enregistrerDepense);
-router.get('/depenses', paiementController.getDepenses);
+// Routes pour les dépenses
+router.post('/depenses', verifierAuth, paiementController.enregistrerDepense);
+router.get('/depenses', verifierAuth, paiementController.getDepenses);
 
 module.exports = router;
