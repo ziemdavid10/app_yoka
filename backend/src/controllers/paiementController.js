@@ -134,19 +134,25 @@ exports.getDebiteurs = async (req, res) => {
 // 4. Enregistrer une charge / dépense externe
 exports.enregistrerDepense = async (req, res) => {
   if (!req.user) return res.status(401).json({ error: "Profil utilisateur manquant." });
-  const { motif, montant, categorie } = req.body;
+  
+  // CORRECTION : On extrait 'titre' au lieu de 'motif' pour correspondre au frontend et à la BDD
+  const { titre, montant, categorie, description, mode_paiement } = req.body;
   const etablissement_id = req.user.etablissement_id;
 
-  if (!motif || !montant) {
-    return res.status(400).json({ error: "Le motif et le montant sont obligatoires." });
+  // CORRECTION : Validation sur 'titre'
+  if (!titre || !montant) {
+    return res.status(400).json({ error: "Le titre et le montant sont obligatoires." });
   }
 
   try {
     await db.execute(`
-      INSERT INTO depenses (motif, montant, categorie, etablissement_id) VALUES (?, ?, ?, ?)
-    `, [motif, montant, categorie || 'AUTRE', etablissement_id]);
+      INSERT INTO depenses (titre, montant, categorie, description, mode_paiement, etablissement_id) 
+      VALUES (?, ?, ?, ?, ?, ?)
+    `, [titre, montant, categorie || 'AUTRE', description || '', mode_paiement || 'ESPECE', etablissement_id]);
 
-    await enregistrerAudit(req, 'CREATION_DEPENSE', `Dépense effectuée : ${motif} (${montant} F CFA)`);
+    // CORRECTION : Utilisation de 'titre' pour la trace d'audit
+    await enregistrerAudit(req, 'CREATION_DEPENSE', `Dépense effectuée : ${titre} (${montant} F CFA)`);
+    
     return res.status(201).json({ message: "Dépense enregistrée avec succès !" });
   } catch (error) {
     console.error("Erreur lors de la création de la dépense :", error);

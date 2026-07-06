@@ -21,3 +21,25 @@ export const loginService = async (credentials) => {
     throw error;
   }
 };
+
+export const registerAdminService = async (adminData) => {
+  try {
+    const response = await fetch('http://localhost:3000/api/auth/register', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('token')}` // Sécurisé par le token du superadmin
+      },
+      body: JSON.stringify({
+        ...adminData,
+        nom_role: 'ADMIN' // Forcé côté frontend pour cette action
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Erreur lors de la création de l’administrateur.');
+    return data;
+  } catch (error) {
+    throw error;
+  }
+};

@@ -209,14 +209,27 @@ const AdminDashboard = () => {
   };
 
   const handleDepenseSubmit = async (e) => {
-    e.preventDefault();
-    try {
-      await saveDepense(depenseForm);
-      afficherMessage('Dépense enregistrée au journal des charges !');
-      setDepenseForm({ titre: '', categorie: 'Fournitures', montant: '', description: '', mode_paiement: 'CASH' });
-      chargerDonnees();
-    } catch (err) { afficherMessage(err.message, true); }
-  };
+  e.preventDefault();
+  try {
+    // Envoie directement 'depenseForm' qui contient { titre, montant, categorie, description, mode_paiement }
+    await saveDepense(depenseForm);
+    
+    afficherMessage('Dépense enregistrée au journal des charges !');
+    
+    // Réinitialisation de l'état avec des valeurs vides/par défaut cohérentes
+    setDepenseForm({ 
+      titre: '', 
+      categorie: 'Fournitures', 
+      montant: '', 
+      description: '', 
+      mode_paiement: 'CASH' 
+    });
+    
+    chargerDonnees();
+  } catch (err) { 
+    afficherMessage(err.message, true); 
+  }
+};
 
   const handleLogout = () => {
     localStorage.clear();
