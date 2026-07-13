@@ -3,21 +3,24 @@ const db = require('../config/db');
 /**
  * Enregistre une action administrative dans le journal d'audit
  */
-exports.enregistrerAudit = async (req, action, details) => {
+exports.enregistrerAudit = async (req, action, description) => {
   try {
-    // req.user doit être injecté au préalable par ton middleware de vérification JWT
-    const utilisateur_id = req.user ? req.user.id : null;
-    const etablissement_id = req.user ? req.user.etablissement_id : null;
+    //  Extraction sécurisée de l'IP (ne plantera pas si req ou req.headers est indéfini)
+    const ip_adresse = req?.headers?.['x-forwarded-for'] || req?.socket?.remoteAddress || '127.0.0.1';
     
-    // Extraction de l'adresse IP de l'appelant
-    const ip_address = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+    // Récupération de l'ID utilisateur de manière sécurisée également
+    const utilisateur_id = req?.user?.id || null;
 
-    const sql = `
-      INSERT INTO audit_logs (utilisateur_id, etablissement_id, action, details, ip_address)
-      VALUES (?, ?, ?, ?, ?)
+    const query = `
+      INSERT INTO logs_audit (utilisateur_id, action, description, ip_adresse, created_at)
+      VALUES (?, ?, ?, ?, NOW())
     `;
-    await db.execute(sql, [utilisateur_id, etablissement_id, action, details, ip_address]);
+
+    const db = require('../config/db'); // S'assurer que le chemin vers votre db est correct
+    await db.execute(query, [utilisateur_id, action, description, ip_adresse]);
+
   } catch (error) {
-    console.error("Erreur critique d'écriture dans le journal d'audit :", error);
+    // On écrit l'erreur dans la console du serveur sans bloquer l'utilisateur final
+    console.error(" Échec d'écriture dans le journal d'audit :", error.message);
   }
 };

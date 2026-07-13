@@ -50,9 +50,9 @@ exports.creerEtablissement = async (req, res) => {
     // Piste d'audit pour la traçabilité de l'infrastructure
     await enregistrerAudit(
       req.user ? req.user.id : null,
+      req.ip,
       'CREATION_ETABLISSEMENT',
-      `Déploiement de la structure : ${nom} [${code_unique}]`,
-      req.ip
+      `Déploiement de la structure : ${nom} [${code_unique}]`
     );
 
     return res.status(201).json({

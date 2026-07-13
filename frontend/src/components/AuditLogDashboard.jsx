@@ -20,8 +20,8 @@ export const AuditLogDashboard = () => {
     try {
       // 1. Récupération des logs filtrés par établissement si spécifié
       const urlLogs = selectedEtab 
-        ? `/api/audit/global-logs?etablissement_id=${selectedEtab}`
-        : '/api/audit/global-logs';
+        ? `/api/audits/global-logs?etablissement_id=${selectedEtab}`
+        : '/api/audits/global-logs';
         
       const resLogs = await fetch(urlLogs, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
