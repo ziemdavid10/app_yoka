@@ -10,6 +10,9 @@ const classeRoutes = require('./src/routes/classeRoutes');
 const inscriptionRoutes = require('./src/routes/inscriptionRoutes');
 const paiementRoutes = require('./src/routes/paiementRoutes');
 const auditRoutes = require('./src/routes/auditRoutes');
+const etablissementRoutes = require('./src/routes/etablissementRoutes');
+
+
 
 dotenv.config();
 
@@ -26,6 +29,7 @@ app.use('/api/classes', classeRoutes);
 app.use('/api/inscriptions', inscriptionRoutes);
 app.use('/api/paiements', paiementRoutes);
 app.use('/api/audits', auditRoutes);
+app.use('/api/etablissements', etablissementRoutes);
 
 // Route de secours / Test
 app.get('/', (req, res) => {

@@ -14,7 +14,6 @@ exports.register = async (req, res) => {
   try {
     let etablissement_id = null;
 
-    // Si ce n'est pas un Superadmin, on récupère l'ID de son établissement via son code unique
     if (nom_role !== 'SUPERADMIN') {
       if (!code_etablissement) {
         return res.status(400).json({ error: "Le code établissement est requis pour ce rôle." });
@@ -26,23 +25,19 @@ exports.register = async (req, res) => {
       etablissement_id = etab[0].id;
     }
 
-    // Récupérer l'ID du rôle demandé
     const [roleRows] = await db.execute('SELECT id FROM roles WHERE nom_role = ?', [nom_role]);
     if (roleRows.length === 0) {
       return res.status(404).json({ error: "Le rôle spécifié n'existe pas." });
     }
     const role_id = roleRows[0].id;
 
-    // Hachage du mot de passe
     const hashedPass = await bcrypt.hash(mot_de_passe, 10);
 
-    // Insertion de l'utilisateur
     const [userResult] = await db.execute(
       'INSERT INTO utilisateurs (etablissement_id, identifiant, mot_de_passe, nom, prenom) VALUES (?, ?, ?, ?, ?)',
       [etablissement_id, identifiant, hashedPass, nom, prenom || '']
     );
 
-    // Attribution du rôle dans la table de jointure
     await db.execute(
       'INSERT INTO utilisateur_roles (utilisateur_id, role_id) VALUES (?, ?)',
       [userResult.insertId, role_id]
@@ -78,7 +73,6 @@ exports.login = async (req, res) => {
       return res.status(401).json({ error: "Identifiants ou code établissement incorrects." });
     }
 
-    // Récupération des rôles associés
     const [roles] = await db.execute(`
       SELECT r.nom_role FROM roles r
       INNER JOIN utilisateur_roles ur ON r.id = ur.role_id
@@ -87,14 +81,12 @@ exports.login = async (req, res) => {
     
     const listeRoles = roles.map(r => r.nom_role);
 
-    // Génération du Token JWT
     const token = jwt.sign(
       { id: user.id, etablissement_id: user.etablissement_id, roles: listeRoles },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
     );
 
-    // Injection temporaire dans req pour le traceur d'audit
     req.user = { id: user.id, etablissement_id: user.etablissement_id, roles: listeRoles };
     await enregistrerAudit(req, 'CONNEXION_REUSSIE', `L'utilisateur ${identifiant} s'est connecté au système.`);
 
@@ -113,5 +105,32 @@ exports.login = async (req, res) => {
   } catch (error) {
     console.error("Erreur lors de l'authentification :", error);
     return res.status(500).json({ error: "Une erreur interne est survenue sur le serveur." });
+  }
+};
+
+// 3. RECUPERATION DES ADMNISTRATEURS (Version Corrigée Multi-tables)
+exports.listerTousLesAdmins = async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+        u.id, 
+        u.identifiant, 
+        u.nom, 
+        u.prenom, 
+        e.code_unique AS code_etablissement, 
+        u.created_at 
+      FROM utilisateurs u
+      INNER JOIN utilisateur_roles ur ON u.id = ur.utilisateur_id
+      INNER JOIN roles r ON ur.role_id = r.id
+      LEFT JOIN etablissements e ON u.etablissement_id = e.id
+      WHERE r.nom_role = 'ADMIN'
+      ORDER BY u.created_at DESC
+    `;
+    
+    const [rows] = await db.execute(query);
+    return res.status(200).json(rows);
+  } catch (error) {
+    console.error("Erreur listerTousLesAdmins :", error);
+    return res.status(500).json({ error: "Erreur lors de la récupération des comptes administrateurs." });
   }
 };
