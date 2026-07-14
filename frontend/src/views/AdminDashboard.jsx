@@ -5,7 +5,7 @@ import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-import { fetchEleves, saveEleve, updateEleve, deleteEleve } from '../services/eleveService';
+import { fetchEleves, saveEleve, updateEleve, deleteEleve, importElevesExcel } from '../services/eleveService';
 import { fetchClasses, saveClasse, updateClasse, deleteClasse } from '../services/classeService';
 import { fetchInscriptions, saveInscription, updateInscription, deleteInscription } from '../services/inscriptionService';
 import {
@@ -265,10 +265,31 @@ const AdminDashboard = () => {
   const [paiementForm, setPaiementForm] = useState(PAIEMENT_VIDE);
   const [depenseForm, setDepenseForm] = useState(DEPENSE_VIDE);
 
+  // Import Excel
+  const [importModal, setImportModal] = useState(false);
+  const [importFichier, setImportFichier] = useState(null);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importResultat, setImportResultat] = useState(null);
+
   // 2. LES FONCTIONS DE RECHARGEMENT ASYNCHRONES
   const afficherMessage = (text, isError = false) => {
     setMessage({ text, isError });
     setTimeout(() => setMessage({ text: '', isError: false }), 4000);
+  };
+
+  const handleImportExcel = async () => {
+    if (!importFichier) return;
+    setImportLoading(true);
+    setImportResultat(null);
+    try {
+      const res = await importElevesExcel(importFichier);
+      setImportResultat(res);
+      chargerDonnees();
+    } catch (err) {
+      setImportResultat({ erreur: err.message });
+    } finally {
+      setImportLoading(false);
+    }
   };
 
   const chargerDonnees = async () => {
@@ -764,6 +785,11 @@ const AdminDashboard = () => {
                     onCreate={() => openCreateModal('eleve')}
                     createLabel="Nouvel élève"
                   />
+                  <div style={{ marginBottom: '10px' }}>
+                    <button onClick={() => { setImportModal(true); setImportFichier(null); setImportResultat(null); }} className="yk-btn yk-btn-ghost yk-btn-sm">
+                      <Icon name="upload_file" style={{ fontSize: '16px' }} /> Importer Excel
+                    </button>
+                  </div>
 
                   <div className="yk-table-scroll">
                     <table className="yk-table">
@@ -1209,6 +1235,77 @@ const AdminDashboard = () => {
       {/* ---------------- CONFIRMATION DE SUPPRESSION ---------------- */}
       {confirmState.type && (
         <ConfirmDialog label={confirmState.label} onConfirm={confirmDelete} onCancel={cancelDelete} />
+      )}
+
+      {/* ---------------- MODAL IMPORT EXCEL ---------------- */}
+      {importModal && (
+        <Modal title="Importer des élèves via Excel" icon="upload_file" onClose={() => setImportModal(false)} accent="#0e9f6e">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+            <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px', padding: '12px', fontSize: '13px', color: '#166534', lineHeight: 1.6 }}>
+              <strong>Format attendu du fichier Excel :</strong><br />
+              Le fichier doit contenir les colonnes suivantes (ligne 1 = en-têtes) :<br />
+              <code style={{ background: '#dcfce7', padding: '2px 6px', borderRadius: '4px', fontFamily: 'monospace' }}>
+                nom | prenom | date_naissance | genre
+              </code><br />
+              <span style={{ fontSize: '12px', color: '#15803d' }}>La date doit être au format <strong>AAAA-MM-JJ</strong> (ex: 2010-05-14). Genre : <strong>M</strong> ou <strong>F</strong>. Limite : 500 élèves.</span>
+            </div>
+
+            <label className="yk-field">
+              <span className="yk-label">Sélectionner le fichier (.xlsx ou .xls)</span>
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                className="yk-input"
+                onChange={e => { setImportFichier(e.target.files[0]); setImportResultat(null); }}
+              />
+            </label>
+
+            {importFichier && !importResultat && (
+              <div style={{ fontSize: '13px', color: 'var(--yk-slate)' }}>
+                Fichier sélectionné : <strong>{importFichier.name}</strong> ({(importFichier.size / 1024).toFixed(1)} Ko)
+              </div>
+            )}
+
+            {importResultat && !importResultat.erreur && (
+              <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px', padding: '12px', fontSize: '13px' }}>
+                <div style={{ color: '#166534', fontWeight: 700, marginBottom: '6px' }}>
+                  <Icon name="check_circle" style={{ fontSize: '16px', verticalAlign: 'middle' }} /> {importResultat.message}
+                </div>
+                {importResultat.erreurs && importResultat.erreurs.length > 0 && (
+                  <div style={{ marginTop: '8px' }}>
+                    <div style={{ color: '#dc2626', fontWeight: 600, marginBottom: '4px' }}>{importResultat.erreurs.length} ligne(s) ignorée(s) :</div>
+                    <ul style={{ margin: 0, paddingLeft: '18px', color: '#dc2626', fontSize: '12px' }}>
+                      {importResultat.erreurs.map((e, i) => (
+                        <li key={i}>Ligne {e.ligne} : {e.raison}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {importResultat?.erreur && (
+              <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', padding: '12px', fontSize: '13px', color: '#dc2626', fontWeight: 600 }}>
+                <Icon name="error" style={{ fontSize: '16px', verticalAlign: 'middle' }} /> {importResultat.erreur}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button className="yk-btn yk-btn-ghost" style={{ flex: 1 }} onClick={() => setImportModal(false)}>Fermer</button>
+              <button
+                className="yk-btn yk-btn-green"
+                style={{ flex: 2 }}
+                onClick={handleImportExcel}
+                disabled={!importFichier || importLoading}
+              >
+                {importLoading
+                  ? <><Icon name="progress_activity" style={{ fontSize: '16px' }} /> Import en cours…</>
+                  : <><Icon name="upload" style={{ fontSize: '16px' }} /> Lancer l'import</>}
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   );

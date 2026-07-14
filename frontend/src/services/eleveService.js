@@ -52,3 +52,16 @@ export const deleteEleve = async (id) => {
 export const exportElevesPDF = () => {
   window.open(`${API_URL}/export-pdf?token=${localStorage.getItem('token')}`, '_blank');
 };
+
+export const importElevesExcel = async (fichier) => {
+  const formData = new FormData();
+  formData.append('fichier', fichier);
+  const response = await fetch(`${API_URL}/import-excel`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+    body: formData
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Erreur lors de l'import.");
+  return data;
+};
