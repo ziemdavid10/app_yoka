@@ -1,19 +1,50 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 // Ajout des imports requis pour les graphiques Recharts
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+// Génération de PDF côté client (npm install jspdf jspdf-autotable)
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
-import { fetchEleves, saveEleve } from '../services/eleveService';
-import { fetchClasses, saveClasse } from '../services/classeService';
-import { fetchInscriptions, saveInscription } from '../services/inscriptionService';
-import { 
-  fetchPaiements, 
-  savePaiement, 
-  fetchStatsFinancieres, 
+import { fetchEleves, saveEleve, updateEleve, deleteEleve } from '../services/eleveService';
+import { fetchClasses, saveClasse, updateClasse, deleteClasse } from '../services/classeService';
+import { fetchInscriptions, saveInscription, updateInscription, deleteInscription } from '../services/inscriptionService';
+import {
+  fetchPaiements,
+  savePaiement,
+  updatePaiement,
+  deletePaiement,
+  fetchStatsFinancieres,
   fetchDebiteurs,
-  fetchDepenses,   
-  saveDepense      
+  fetchDepenses,
+  saveDepense,
+  updateDepense,
+  deleteDepense
 } from '../services/paiementService';
+// Note : updatePaiement, deletePaiement, updateDepense, deleteDepense sont définis dans paiementService.js
 import { imprimerRecu } from '../utils/imprimerRecu';
+
+/**
+ * IMPORTANT — Fonctions de service attendues :
+ * Ce composant suppose que les services exposent désormais, en plus des fonctions
+ * déjà existantes (fetchX / saveX), les fonctions CRUD suivantes :
+ *   updateEleve(id, data)        deleteEleve(id)
+ *   updateClasse(id, data)       deleteClasse(id)
+ *   updateInscription(id, data)  deleteInscription(id)
+ *   updatePaiement(id, data)     deletePaiement(id)
+ *   updateDepense(id, data)      deleteDepense(id)
+ * Si elles n'existent pas encore côté services/*.js, il faut les ajouter
+ * (généralement des appels PUT/PATCH et DELETE vers l'API REST correspondante).
+ */
+
+const PAGE_SIZE = 8;
+
+// Helper centralisé : formate un montant en F CFA de façon cohérente
+const formatMontant = (valeur) => {
+  const n = parseFloat(valeur);
+  if (isNaN(n)) return '0 F CFA';
+  const formatted = Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  return `${formatted} F CFA`;
+};
 
 // Structure de données locale pour l'analyse financière mensuelle
 const localDataMock = [
@@ -74,6 +105,118 @@ const NAV_ITEMS = [
   { key: 'comptabilite', label: 'Caisse & Versements', icon: 'payments' },
 ];
 
+// -------------------- COMPOSANTS RÉUTILISABLES --------------------
+
+// Fenêtre modale générique (formulaires de création / édition)
+const Modal = ({ title, icon, onClose, children, accent = '#0369a1' }) => (
+  <div className="yk-modal-backdrop" onMouseDown={onClose}>
+    <div className="yk-modal" onMouseDown={e => e.stopPropagation()}>
+      <div className="yk-modal-header" style={{ borderTopColor: accent }}>
+        <h3 className="yk-card-title" style={{ margin: 0, border: 'none', padding: 0 }}>
+          <Icon name={icon} /> {title}
+        </h3>
+        <button className="yk-modal-close" onClick={onClose} aria-label="Fermer">
+          <Icon name="close" />
+        </button>
+      </div>
+      <div className="yk-modal-body">{children}</div>
+    </div>
+  </div>
+);
+
+// Boîte de dialogue de confirmation (suppression)
+const ConfirmDialog = ({ label, onConfirm, onCancel }) => (
+  <div className="yk-modal-backdrop" onMouseDown={onCancel}>
+    <div className="yk-modal yk-modal-sm" onMouseDown={e => e.stopPropagation()}>
+      <div className="yk-modal-header" style={{ borderTopColor: '#dc2626' }}>
+        <h3 className="yk-card-title" style={{ margin: 0, border: 'none', padding: 0, color: '#dc2626' }}>
+          <Icon name="warning" filled /> Confirmer la suppression
+        </h3>
+      </div>
+      <div className="yk-modal-body">
+        <p style={{ fontSize: '14px', color: 'var(--yk-slate)', lineHeight: 1.5 }}>
+          Êtes-vous sûr de vouloir supprimer <strong>{label}</strong> ? Cette action est irréversible.
+        </p>
+        <div style={{ display: 'flex', gap: '10px', marginTop: '18px' }}>
+          <button className="yk-btn yk-btn-ghost" style={{ flex: 1 }} onClick={onCancel}>Annuler</button>
+          <button className="yk-btn" style={{ flex: 1, background: '#dc2626', color: '#fff' }} onClick={onConfirm}>
+            <Icon name="delete" /> Supprimer
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+);
+
+// Pagination réutilisable pour toutes les listes
+const Pagination = ({ page, totalPages, onChange, totalItems }) => {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="yk-pagination">
+      <span className="yk-muted" style={{ fontSize: '12.5px' }}>
+        Page {page} / {totalPages} — {totalItems} élément{totalItems > 1 ? 's' : ''}
+      </span>
+      <div style={{ display: 'flex', gap: '6px' }}>
+        <button className="yk-btn yk-btn-ghost yk-btn-sm" disabled={page <= 1} onClick={() => onChange(1)}>
+          <Icon name="first_page" style={{ fontSize: '16px' }} />
+        </button>
+        <button className="yk-btn yk-btn-ghost yk-btn-sm" disabled={page <= 1} onClick={() => onChange(page - 1)}>
+          <Icon name="chevron_left" style={{ fontSize: '16px' }} />
+        </button>
+        <button className="yk-btn yk-btn-ghost yk-btn-sm" disabled={page >= totalPages} onClick={() => onChange(page + 1)}>
+          <Icon name="chevron_right" style={{ fontSize: '16px' }} />
+        </button>
+        <button className="yk-btn yk-btn-ghost yk-btn-sm" disabled={page >= totalPages} onClick={() => onChange(totalPages)}>
+          <Icon name="last_page" style={{ fontSize: '16px' }} />
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// Barre d'outils commune à chaque liste : recherche, filtre classe, export PDF, bouton "Nouveau"
+const ListToolbar = ({ searchValue, onSearchChange, searchPlaceholder, classes, classeFilter, onClasseFilterChange, onExportPdf, onCreate, createLabel }) => (
+  <div className="yk-toolbar">
+    <div className="yk-toolbar-filters">
+      {onSearchChange && (
+        <input
+          type="text"
+          placeholder={searchPlaceholder}
+          value={searchValue}
+          onChange={e => onSearchChange(e.target.value)}
+          className="yk-input"
+          style={{ maxWidth: '240px', height: '36px', fontSize: '13px' }}
+        />
+      )}
+      {classes && (
+        <select
+          value={classeFilter}
+          onChange={e => onClasseFilterChange(e.target.value)}
+          className="yk-input"
+          style={{ maxWidth: '190px', height: '36px', fontSize: '13px' }}
+        >
+          <option value="">Toutes les classes</option>
+          {classes.map(cl => <option key={cl.id} value={cl.nom}>{cl.nom}</option>)}
+        </select>
+      )}
+    </div>
+    <div style={{ display: 'flex', gap: '8px' }}>
+      {onExportPdf && (
+        <button onClick={onExportPdf} className="yk-btn yk-btn-ghost yk-btn-sm">
+          <Icon name="picture_as_pdf" style={{ fontSize: '16px' }} /> Export PDF
+        </button>
+      )}
+      {onCreate && (
+        <button onClick={onCreate} className="yk-btn yk-btn-blue yk-btn-sm">
+          <Icon name="add" style={{ fontSize: '16px' }} /> {createLabel}
+        </button>
+      )}
+    </div>
+  </div>
+);
+
+// -------------------- COMPOSANT PRINCIPAL --------------------
+
 const AdminDashboard = () => {
   const user = JSON.parse(localStorage.getItem('user'));
 
@@ -82,7 +225,16 @@ const AdminDashboard = () => {
   const [message, setMessage] = useState({ text: '', isError: false });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState(''); 
+  const [searchTerm, setSearchTerm] = useState('');
+  const [classeFilter, setClasseFilter] = useState('');
+
+  // Pagination indépendante par liste
+  const [pages, setPages] = useState({ eleves: 1, classes: 1, inscriptions: 1, paiements: 1, depenses: 1, debiteurs: 1 });
+  const setPage = (key, value) => setPages(prev => ({ ...prev, [key]: value }));
+
+  // Modale de création/édition et boîte de confirmation de suppression
+  const [modal, setModal] = useState({ type: null, mode: null, id: null });
+  const [confirmState, setConfirmState] = useState({ type: null, id: null, label: '' });
 
   // Listes de données
   const [eleves, setEleves] = useState([]);
@@ -90,36 +242,28 @@ const AdminDashboard = () => {
   const [inscriptions, setInscriptions] = useState([]);
   const [paiements, setPaiements] = useState([]);
   const [debiteurs, setDebiteurs] = useState([]);
-  const [depenses, setDepenses] = useState([]); 
-  const [stats, setStats] = useState({ 
-    total_attendu: 0, 
-    total_encaisse: 0, 
-    total_restant: 0, 
-    total_depenses: 0, 
-    solde_caisse: 0,   
-    taux_recouvrement: 0 
+  const [depenses, setDepenses] = useState([]);
+  const [stats, setStats] = useState({
+    total_attendu: 0,
+    total_encaisse: 0,
+    total_restant: 0,
+    total_depenses: 0,
+    solde_caisse: 0,
+    taux_recouvrement: 0
   });
 
-  // Formulaires
-  const [eleveForm, setEleveForm] = useState({ matricule: '', nom: '', prenom: '', date_naissance: '', genre: 'M' });
-  const [classeForm, setClasseForm] = useState({ nom: '', frais_scolarite: '' });
-  const [inscriptionForm, setInscriptionForm] = useState({ eleve_id: '', classe_id: '' });
-  
-  const [paiementForm, setPaiementForm] = useState({ 
-    inscription_id: '', 
-    montant: '', 
-    type_versement: 'Tranche 1', 
-    mode_paiement: 'CASH', 
-    reference_banque: '' 
-  });
+  // Formulaires (réutilisés pour la création ET l'édition)
+  const ELEVE_VIDE = { matricule: '', nom: '', prenom: '', date_naissance: '', genre: 'M' };
+  const CLASSE_VIDE = { nom: '', frais_scolarite: '' };
+  const INSCRIPTION_VIDE = { eleve_id: '', classe_id: '' };
+  const PAIEMENT_VIDE = { inscription_id: '', montant: '', type_versement: 'Tranche 1', mode_paiement: 'CASH', reference_banque: '' };
+  const DEPENSE_VIDE = { titre: '', categorie: 'Fournitures', montant: '', description: '', mode_paiement: 'CASH' };
 
-  const [depenseForm, setDepenseForm] = useState({
-    titre: '',
-    categorie: 'Fournitures',
-    montant: '',
-    description: '',
-    mode_paiement: 'CASH'
-  });
+  const [eleveForm, setEleveForm] = useState(ELEVE_VIDE);
+  const [classeForm, setClasseForm] = useState(CLASSE_VIDE);
+  const [inscriptionForm, setInscriptionForm] = useState(INSCRIPTION_VIDE);
+  const [paiementForm, setPaiementForm] = useState(PAIEMENT_VIDE);
+  const [depenseForm, setDepenseForm] = useState(DEPENSE_VIDE);
 
   // 2. LES FONCTIONS DE RECHARGEMENT ASYNCHRONES
   const afficherMessage = (text, isError = false) => {
@@ -167,13 +311,31 @@ const AdminDashboard = () => {
     chargerDonnees();
   }, []);
 
-  // 4. ACTION HANDLERS
+  // Réinitialise recherche, filtre classe et pagination quand on change d'onglet
+  useEffect(() => {
+    setSearchTerm('');
+    setClasseFilter('');
+  }, [activeTab]);
+
+  // 4. CORRESPONDANCE ÉLÈVE <-> CLASSE (via le matricule, présent sur les deux entités)
+  const classeParMatricule = useMemo(() => {
+    const map = {};
+    inscriptions.forEach(ins => { map[ins.matricule] = ins.classe_nom; });
+    return map;
+  }, [inscriptions]);
+
+  // 5. HANDLERS DE FORMULAIRE (CRÉATION + ÉDITION UNIFIÉES)
   const handleEleveSubmit = async (e) => {
     e.preventDefault();
     try {
-      await saveEleve(eleveForm);
-      afficherMessage('Fiche élève créée !');
-      setEleveForm({ matricule: '', nom: '', prenom: '', date_naissance: '', genre: 'M' });
+      if (modal.mode === 'edit') {
+        await updateEleve(modal.id, eleveForm);
+        afficherMessage('Fiche élève mise à jour !');
+      } else {
+        await saveEleve(eleveForm);
+        afficherMessage('Fiche élève créée !');
+      }
+      closeModal();
       chargerDonnees();
     } catch (err) { afficherMessage(err.message, true); }
   };
@@ -181,9 +343,14 @@ const AdminDashboard = () => {
   const handleClasseSubmit = async (e) => {
     e.preventDefault();
     try {
-      await saveClasse(classeForm);
-      afficherMessage('Classe configurée !');
-      setClasseForm({ nom: '', frais_scolarite: '' });
+      if (modal.mode === 'edit') {
+        await updateClasse(modal.id, classeForm);
+        afficherMessage('Classe mise à jour !');
+      } else {
+        await saveClasse(classeForm);
+        afficherMessage('Classe configurée !');
+      }
+      closeModal();
       chargerDonnees();
     } catch (err) { afficherMessage(err.message, true); }
   };
@@ -191,9 +358,14 @@ const AdminDashboard = () => {
   const handleInscriptionSubmit = async (e) => {
     e.preventDefault();
     try {
-      await saveInscription(inscriptionForm);
-      afficherMessage('Élève inscrit !');
-      setInscriptionForm({ eleve_id: '', classe_id: '' });
+      if (modal.mode === 'edit') {
+        await updateInscription(modal.id, inscriptionForm);
+        afficherMessage('Inscription mise à jour !');
+      } else {
+        await saveInscription(inscriptionForm);
+        afficherMessage('Élève inscrit !');
+      }
+      closeModal();
       chargerDonnees();
     } catch (err) { afficherMessage(err.message, true); }
   };
@@ -201,9 +373,14 @@ const AdminDashboard = () => {
   const handlePaiementSubmit = async (e) => {
     e.preventDefault();
     try {
-      await savePaiement(paiementForm);
-      afficherMessage('Versement encaissé avec succès !');
-      setPaiementForm({ inscription_id: '', montant: '', type_versement: 'Tranche 1', mode_paiement: 'CASH', reference_banque: '' });
+      if (modal.mode === 'edit') {
+        await updatePaiement(modal.id, paiementForm);
+        afficherMessage('Versement mis à jour !');
+      } else {
+        await savePaiement(paiementForm);
+        afficherMessage('Versement encaissé avec succès !');
+      }
+      closeModal();
       chargerDonnees();
     } catch (err) { afficherMessage(err.message, true); }
   };
@@ -211,18 +388,17 @@ const AdminDashboard = () => {
   const handleDepenseSubmit = async (e) => {
     e.preventDefault();
     try {
-      await saveDepense(depenseForm);
-      afficherMessage('Dépense enregistrée au journal des charges !');
-      setDepenseForm({ 
-        titre: '', 
-        categorie: 'Fournitures', 
-        montant: '', 
-        description: '', 
-        mode_paiement: 'CASH' 
-      });
+      if (modal.mode === 'edit') {
+        await updateDepense(modal.id, depenseForm);
+        afficherMessage('Dépense mise à jour !');
+      } else {
+        await saveDepense(depenseForm);
+        afficherMessage('Dépense enregistrée au journal des charges !');
+      }
+      closeModal();
       chargerDonnees();
-    } catch (err) { 
-      afficherMessage(err.message, true); 
+    } catch (err) {
+      afficherMessage(err.message, true);
     }
   };
 
@@ -231,11 +407,54 @@ const AdminDashboard = () => {
     window.location.href = '/';
   };
 
+  // 6. OUVERTURE / FERMETURE DES MODALES
+  const openCreateModal = (type) => {
+    if (type === 'eleve') setEleveForm(ELEVE_VIDE);
+    if (type === 'classe') setClasseForm(CLASSE_VIDE);
+    if (type === 'inscription') setInscriptionForm(INSCRIPTION_VIDE);
+    if (type === 'paiement') setPaiementForm(PAIEMENT_VIDE);
+    if (type === 'depense') setDepenseForm(DEPENSE_VIDE);
+    setModal({ type, mode: 'create', id: null });
+  };
+
+  const openEditModal = (type, item) => {
+    if (type === 'eleve') setEleveForm({ matricule: item.matricule, nom: item.nom, prenom: item.prenom, date_naissance: item.date_naissance || '', genre: item.genre || 'M' });
+    if (type === 'classe') setClasseForm({ nom: item.nom, frais_scolarite: item.frais_scolarite });
+    if (type === 'inscription') setInscriptionForm({ eleve_id: item.eleve_id ?? '', classe_id: item.classe_id ?? '' });
+    if (type === 'paiement') setPaiementForm({ inscription_id: item.inscription_id ?? '', montant: item.montant, type_versement: item.type_versement || 'Tranche 1', mode_paiement: item.mode_paiement || 'CASH', reference_banque: item.reference_banque || '' });
+    if (type === 'depense') setDepenseForm({ titre: item.titre, categorie: item.categorie || 'Fournitures', montant: item.montant, description: item.description || '', mode_paiement: item.mode_paiement || 'CASH' });
+    setModal({ type, mode: 'edit', id: item.id });
+  };
+
+  const closeModal = () => setModal({ type: null, mode: null, id: null });
+
+  // 7. SUPPRESSION (avec confirmation)
+  const requestDelete = (type, id, label) => setConfirmState({ type, id, label });
+  const cancelDelete = () => setConfirmState({ type: null, id: null, label: '' });
+
+  const confirmDelete = async () => {
+    const { type, id } = confirmState;
+    try {
+      if (type === 'eleve') await deleteEleve(id);
+      if (type === 'classe') await deleteClasse(id);
+      if (type === 'inscription') await deleteInscription(id);
+      if (type === 'paiement') await deletePaiement(id);
+      if (type === 'depense') await deleteDepense(id);
+      afficherMessage('Élément supprimé avec succès.');
+      chargerDonnees();
+    } catch (err) {
+      afficherMessage(err.message, true);
+    } finally {
+      cancelDelete();
+    }
+  };
+
+  // 8. EXPORTS
   const exporterDebiteursCSV = () => {
-    if (debiteurs.length === 0) return;
+    if (filteredDebiteurs.length === 0) return;
     let csvContent = 'data:text/csv;charset=utf-8,\uFEFF';
     csvContent += 'Matricule;Nom Complet;Classe;Scolarite Totale;Montant Verse;Dette Restante\n';
-    debiteurs.forEach(d => {
+    filteredDebiteurs.forEach(d => {
       csvContent += `${d.matricule};${d.nom} ${d.prenom};${d.classe_nom};${d.total_scolarite};${d.total_paye};${d.reste_a_payer}\n`;
     });
     const encodedUri = encodeURI(csvContent);
@@ -247,6 +466,29 @@ const AdminDashboard = () => {
     document.body.removeChild(link);
   };
 
+  // Génération PDF générique, utilisée par toutes les listes
+  const exporterPDF = (titre, colonnes, lignes, nomFichier) => {
+    if (lignes.length === 0) {
+      afficherMessage('Aucune donnée à exporter pour ce filtre.', true);
+      return;
+    }
+    const doc = new jsPDF();
+    doc.setFontSize(14);
+    doc.text(titre, 14, 16);
+    doc.setFontSize(9);
+    doc.setTextColor(100);
+    doc.text(`École : Yoka École — Généré le ${new Date().toLocaleDateString('fr-FR')}`, 14, 22);
+    autoTable(doc, {
+      startY: 28,
+      head: [colonnes],
+      body: lignes,
+      styles: { fontSize: 8, cellPadding: 3 },
+      headStyles: { fillColor: [15, 23, 42], textColor: 255 },
+      alternateRowStyles: { fillColor: [248, 250, 252] }
+    });
+    doc.save(`${nomFichier}_${new Date().toISOString().split('T')[0]}.pdf`);
+  };
+
   const copierRelanceMessage = (d) => {
     const messageRelance = `RAPPEL COMPTABILITÉ YOKA ÉCOLE :\nCher Parent, le compte de l'élève ${d.nom.toUpperCase()} ${d.prenom} (${d.classe_nom}) presents un reste à payer de ${parseFloat(d.reste_a_payer).toLocaleString()} F CFA sur les frais de scolarité. Merci de passer à la caisse de l'établissement dès que possible pour régulariser sa situation. Cordialement.`;
     navigator.clipboard.writeText(messageRelance);
@@ -255,17 +497,57 @@ const AdminDashboard = () => {
 
   const currentNav = NAV_ITEMS.find(n => n.key === activeTab);
 
-  const filteredEleves = eleves.filter(el => 
-    el.nom.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    el.prenom.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    el.matricule.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // 9. FILTRAGE (recherche + classe) — calculé avant pagination
+  const filteredEleves = useMemo(() => eleves.filter(el => {
+    const matchTerm = el.nom.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      el.prenom.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      el.matricule.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchClasse = !classeFilter || classeParMatricule[el.matricule] === classeFilter;
+    return matchTerm && matchClasse;
+  }), [eleves, searchTerm, classeFilter, classeParMatricule]);
 
-  const filteredDebiteurs = debiteurs.filter(d => 
-    d.nom.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    d.prenom.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    d.matricule.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredDebiteurs = useMemo(() => debiteurs.filter(d => {
+    const matchTerm = d.nom.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      d.prenom.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      d.matricule.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchClasse = !classeFilter || d.classe_nom === classeFilter;
+    return matchTerm && matchClasse;
+  }), [debiteurs, searchTerm, classeFilter]);
+
+  const filteredClasses = useMemo(() => classes.filter(cl =>
+    cl.nom.toLowerCase().includes(searchTerm.toLowerCase())
+  ), [classes, searchTerm]);
+
+  const filteredInscriptions = useMemo(() => inscriptions.filter(ins => {
+    const matchTerm = ins.nom.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      ins.prenom.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      ins.matricule.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchClasse = !classeFilter || ins.classe_nom === classeFilter;
+    return matchTerm && matchClasse;
+  }), [inscriptions, searchTerm, classeFilter]);
+
+  const filteredPaiements = useMemo(() => paiements.filter(p => {
+    const matchTerm = p.nom.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      p.prenom.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchClasse = !classeFilter || p.classe_nom === classeFilter;
+    return matchTerm && matchClasse;
+  }), [paiements, searchTerm, classeFilter]);
+
+  const filteredDepenses = useMemo(() => depenses.filter(d =>
+    d.titre.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (d.categorie || '').toLowerCase().includes(searchTerm.toLowerCase())
+  ), [depenses, searchTerm]);
+
+  // 10. PAGINATION — appliquée après filtrage
+  const paginer = (liste, page) => liste.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const totalPages = (liste) => Math.max(1, Math.ceil(liste.length / PAGE_SIZE));
+
+  const pageEleves = paginer(filteredEleves, pages.eleves);
+  const pageClasses = paginer(filteredClasses, pages.classes);
+  const pageInscriptions = paginer(filteredInscriptions, pages.inscriptions);
+  const pagePaiements = paginer(filteredPaiements, pages.paiements);
+  const pageDepenses = paginer(filteredDepenses, pages.depenses);
+  const pageDebiteurs = paginer(filteredDebiteurs, pages.debiteurs);
 
   return (
     <div className="yk-app">
@@ -294,7 +576,7 @@ const AdminDashboard = () => {
           {NAV_ITEMS.map(item => (
             <button
               key={item.key}
-              onClick={() => { setActiveTab(item.key); setSearchTerm(''); setSidebarOpen(false); }}
+              onClick={() => { setActiveTab(item.key); setSidebarOpen(false); }}
               className={`yk-nav-link ${activeTab === item.key ? 'is-active' : ''}`}
               data-tab={item.key}
             >
@@ -340,30 +622,30 @@ const AdminDashboard = () => {
                     <div className="yk-kpi-card yk-kpi-blue">
                       <div className="yk-kpi-icon"><Icon name="account_balance_wallet" /></div>
                       <div>
-                        <span className="yk-kpi-label">Scolarités attendues</span>
-                        <span className="yk-kpi-value">{stats.total_attendu?.toLocaleString()} F CFA</span>
+                        <span className="yk-kpi-label">Total attendu</span>
+                        <span className="yk-kpi-value">{formatMontant(stats.total_attendu)}</span>
                       </div>
                     </div>
                     <div className="yk-kpi-card yk-kpi-blue">
                       <div className="yk-kpi-icon"><Icon name="savings" /></div>
                       <div>
                         <span className="yk-kpi-label">Total encaissé</span>
-                        <span className="yk-kpi-value">{stats.total_encaisse?.toLocaleString()} F CFA</span>
+                        <span className="yk-kpi-value">{formatMontant(stats.total_encaisse)}</span>
                       </div>
                     </div>
                     <div className="yk-kpi-card yk-kpi-red">
                       <div className="yk-kpi-icon"><Icon name="trending_down" /></div>
                       <div>
                         <span className="yk-kpi-label">Reste à recouvrer</span>
-                        <span className="yk-kpi-value">{stats.total_restant?.toLocaleString()} F CFA</span>
+                        <span className="yk-kpi-value">{formatMontant(stats.total_restant)}</span>
                       </div>
                     </div>
-                    
+
                     <div className="yk-kpi-card yk-kpi-red" style={{ borderTopColor: '#e11d48' }}>
                       <div className="yk-kpi-icon" style={{ background: '#fff1f2', color: '#e11d48' }}><Icon name="money_off" /></div>
                       <div>
                         <span className="yk-kpi-label">Total Dépenses</span>
-                        <span className="yk-kpi-value" style={{ color: '#e11d48' }}>{stats.total_depenses?.toLocaleString()} F CFA</span>
+                        <span className="yk-kpi-value" style={{ color: '#e11d48' }}>{formatMontant(stats.total_depenses)}</span>
                       </div>
                     </div>
 
@@ -371,7 +653,7 @@ const AdminDashboard = () => {
                       <div className="yk-kpi-icon" style={{ background: stats.solde_caisse >= 0 ? '#ecfdf5' : '#fef2f2', color: stats.solde_caisse >= 0 ? 'var(--yk-green)' : 'var(--yk-red)' }}><Icon name="account_balance" /></div>
                       <div>
                         <span className="yk-kpi-label">Solde Réel Caisse</span>
-                        <span className="yk-kpi-value" style={{ color: stats.solde_caisse >= 0 ? 'var(--yk-green)' : 'var(--yk-red)' }}>{stats.solde_caisse?.toLocaleString()} F CFA</span>
+                        <span className="yk-kpi-value" style={{ color: stats.solde_caisse >= 0 ? 'var(--yk-green)' : 'var(--yk-red)' }}>{formatMontant(stats.solde_caisse)}</span>
                       </div>
                     </div>
 
@@ -392,8 +674,25 @@ const AdminDashboard = () => {
                       <h3 className="yk-card-title yk-title-danger">
                         <Icon name="warning" filled /> Liste rouge des élèves insolvables
                       </h3>
-                      <button onClick={exporterDebiteursCSV} disabled={filteredDebiteurs.length === 0} className="yk-btn yk-btn-green">
-                        <Icon name="file_download" /> Exporter pour Excel
+                    </div>
+
+                    <ListToolbar
+                      searchValue={searchTerm}
+                      onSearchChange={setSearchTerm}
+                      searchPlaceholder="Rechercher un débiteur…"
+                      classes={classes}
+                      classeFilter={classeFilter}
+                      onClasseFilterChange={setClasseFilter}
+                      onExportPdf={() => exporterPDF(
+                        'Liste rouge des élèves insolvables',
+                        ['Matricule', 'Nom complet', 'Classe', 'Scolarité', 'Payé', 'Dette'],
+                        filteredDebiteurs.map(d => [d.matricule, `${d.nom} ${d.prenom}`, d.classe_nom, formatMontant(d.total_scolarite), formatMontant(d.total_paye), formatMontant(d.reste_a_payer)]),
+                        'liste_debiteurs'
+                      )}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '10px' }}>
+                      <button onClick={exporterDebiteursCSV} disabled={filteredDebiteurs.length === 0} className="yk-btn yk-btn-green yk-btn-sm">
+                        <Icon name="file_download" style={{ fontSize: '16px' }} /> Export CSV / Excel
                       </button>
                     </div>
 
@@ -411,19 +710,19 @@ const AdminDashboard = () => {
                           </tr>
                         </thead>
                         <tbody>
-                          {filteredDebiteurs.length === 0 ? (
-                            <tr><td colSpan="7" className="yk-empty-row">
+                          {pageDebiteurs.length === 0 ? (
+                            <tr><td colSpan={7} className="yk-empty-row">
                               <Icon name="celebration" filled style={{ color: '#10b981' }} /> Aucun débiteur ne correspond !
                             </td></tr>
                           ) : (
-                            filteredDebiteurs.map(d => (
+                            pageDebiteurs.map(d => (
                               <tr key={d.inscription_id}>
                                 <td>{d.matricule}</td>
                                 <td className="yk-strong">{d.nom} {d.prenom}</td>
                                 <td>{d.classe_nom}</td>
-                                <td>{parseFloat(d.total_scolarite).toLocaleString()} F</td>
-                                <td className="yk-text-green">{parseFloat(d.total_paye).toLocaleString()} F</td>
-                                <td className="yk-debt-cell">{parseFloat(d.reste_a_payer).toLocaleString()} F</td>
+                                <td>{formatMontant(d.total_scolarite)}</td>
+                                <td className="yk-text-green">{formatMontant(d.total_paye)}</td>
+                                <td className="yk-debt-cell">{formatMontant(d.reste_a_payer)}</td>
                                 <td>
                                   <button onClick={() => copierRelanceMessage(d)} className="yk-btn yk-btn-amber yk-btn-sm">
                                     <Icon name="forum" style={{ fontSize: '16px' }} /> Relancer
@@ -435,242 +734,248 @@ const AdminDashboard = () => {
                         </tbody>
                       </table>
                     </div>
+                    <Pagination page={pages.debiteurs} totalPages={totalPages(filteredDebiteurs)} totalItems={filteredDebiteurs.length} onChange={p => setPage('debiteurs', p)} />
                   </div>
                 </div>
               )}
 
               {/* ---------------- ÉLÈVES ---------------- */}
               {activeTab === 'eleves' && (
-                <div className="yk-grid-layout yk-fade-in">
-                  <div className="yk-card yk-card-form">
-                    <h3 className="yk-card-title"><Icon name="person_add" /> Enregistrer un élève</h3>
-                    <form onSubmit={handleEleveSubmit} className="yk-form">
-                      <label className="yk-field">
-                        <span className="yk-label">Matricule</span>
-                        <input type="text" placeholder="Généré automatiquement" value={eleveForm.matricule} disabled className="yk-input" />
-                      </label>
-                      <label className="yk-field">
-                        <span className="yk-label">Nom</span>
-                        <input type="text" placeholder="Nom de famille" value={eleveForm.nom} onChange={e => setEleveForm({ ...eleveForm, nom: e.target.value })} required className="yk-input" />
-                      </label>
-                      <label className="yk-field">
-                        <span className="yk-label">Prénom</span>
-                        <input type="text" placeholder="Prénom" value={eleveForm.prenom} onChange={e => setEleveForm({ ...eleveForm, prenom: e.target.value })} required className="yk-input" />
-                      </label>
-                      <label className="yk-field">
-                        <span className="yk-label">Date de naissance</span>
-                        <input type="date" value={eleveForm.date_naissance} onChange={e => setEleveForm({ ...eleveForm, date_naissance: e.target.value })} required className="yk-input" />
-                      </label>
-                      <label className="yk-field">
-                        <span className="yk-label">Genre</span>
-                        <select value={eleveForm.genre} onChange={e => setEleveForm({ ...eleveForm, genre: e.target.value })} className="yk-input">
-                          <option value="M">Masculin</option>
-                          <option value="F">Féminin</option>
-                        </select>
-                      </label>
-                      <button type="submit" className="yk-btn yk-btn-green yk-btn-block"><Icon name="save" /> Créer la fiche</button>
-                    </form>
+                <div className="yk-card yk-fade-in">
+                  <div className="yk-card-header">
+                    <h3 className="yk-card-title" style={{ margin: 0, border: 'none', padding: 0 }}>
+                      <Icon name="groups" /> Élèves globaux ({filteredEleves.length})
+                    </h3>
                   </div>
 
-                  <div className="yk-card yk-card-table">
-                    <div style={{ display: 'flex', justifycontent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
-                      <h3 className="yk-card-title" style={{ margin: 0, border: 'none', padding: 0 }}>
-                        <Icon name="groups" /> Élèves globaux ({filteredEleves.length})
-                      </h3>
-                      <input 
-                        type="text" 
-                        placeholder="Rechercher un élève (Nom, matricule...)" 
-                        value={searchTerm}
-                        onChange={e => setSearchTerm(e.target.value)}
-                        className="yk-input"
-                        style={{ maxWidth: '280px', height: '36px', fontSize: '13px' }}
-                      />
-                    </div>
-  
-                    <div className="yk-table-scroll">
-                      <table className="yk-table">
-                        <thead><tr><th>Matricule</th><th>Nom complet</th><th>Genre</th></tr></thead>
-                        <tbody>
-                          {filteredEleves.length === 0 ? (
-                            <tr><td colSpan="3" className="yk-empty-row">Aucun élève ne correspond à la recherche.</td></tr>
-                          ) : filteredEleves.map(el => (
-                            <tr key={el.id}><td>{el.matricule}</td><td className="yk-strong">{el.nom} {el.prenom}</td><td>{el.genre}</td></tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                  <ListToolbar
+                    searchValue={searchTerm}
+                    onSearchChange={setSearchTerm}
+                    searchPlaceholder="Rechercher (nom, matricule…)"
+                    classes={classes}
+                    classeFilter={classeFilter}
+                    onClasseFilterChange={setClasseFilter}
+                    onExportPdf={() => exporterPDF(
+                      'Registre des élèves',
+                      ['Matricule', 'Nom complet', 'Genre', 'Classe'],
+                      filteredEleves.map(el => [el.matricule, `${el.nom} ${el.prenom}`, el.genre, classeParMatricule[el.matricule] || '—']),
+                      'liste_eleves'
+                    )}
+                    onCreate={() => openCreateModal('eleve')}
+                    createLabel="Nouvel élève"
+                  />
+
+                  <div className="yk-table-scroll">
+                    <table className="yk-table">
+                      <thead><tr><th>Matricule</th><th>Nom complet</th><th>Genre</th><th>Classe</th><th>Actions</th></tr></thead>
+                      <tbody>
+                        {pageEleves.length === 0 ? (
+                          <tr><td colSpan={5} className="yk-empty-row">Aucun élève ne correspond à la recherche.</td></tr>
+                        ) : pageEleves.map(el => (
+                          <tr key={el.id}>
+                            <td>{el.matricule}</td>
+                            <td className="yk-strong">{el.nom} {el.prenom}</td>
+                            <td>{el.genre}</td>
+                            <td>{classeParMatricule[el.matricule] || <span className="yk-muted">Non inscrit</span>}</td>
+                            <td>
+                              <div style={{ display: 'flex', gap: '6px' }}>
+                                <button className="yk-btn yk-btn-ghost yk-btn-sm" onClick={() => openEditModal('eleve', el)}>
+                                  <Icon name="edit" style={{ fontSize: '16px' }} />
+                                </button>
+                                <button className="yk-btn yk-btn-sm" style={{ background: '#fef2f2', color: '#dc2626' }} onClick={() => requestDelete('eleve', el.id, `${el.nom} ${el.prenom}`)}>
+                                  <Icon name="delete" style={{ fontSize: '16px' }} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
+                  <Pagination page={pages.eleves} totalPages={totalPages(filteredEleves)} totalItems={filteredEleves.length} onChange={p => setPage('eleves', p)} />
                 </div>
               )}
 
               {/* ---------------- CLASSES ---------------- */}
               {activeTab === 'classes' && (
-                <div className="yk-grid-layout yk-fade-in">
-                  <div className="yk-card yk-card-form">
-                    <h3 className="yk-card-title"><Icon name="add_business" /> Nouvelle classe</h3>
-                    <form onSubmit={handleClasseSubmit} className="yk-form">
-                      <label className="yk-field">
-                        <span className="yk-label">Nom de la classe</span>
-                        <input type="text" placeholder="Ex : SIL 1" value={classeForm.nom} onChange={e => setClasseForm({ ...classeForm, nom: e.target.value })} required className="yk-input" />
-                      </label>
-                      <label className="yk-field">
-                        <span className="yk-label">Frais de scolarité (F CFA)</span>
-                        <input type="number" placeholder="Ex : 150000" value={classeForm.frais_scolarite} onChange={e => setClasseForm({ ...classeForm, frais_scolarite: e.target.value })} required className="yk-input" />
-                      </label>
-                      <button type="submit" className="yk-btn yk-btn-blue yk-btn-block"><Icon name="save" /> Créer la classe</button>
-                    </form>
+                <div className="yk-card yk-fade-in">
+                  <div className="yk-card-header">
+                    <h3 className="yk-card-title" style={{ margin: 0, border: 'none', padding: 0 }}>
+                      <Icon name="domain" /> Niveaux actifs ({filteredClasses.length})
+                    </h3>
                   </div>
 
-                  <div className="yk-card yk-card-table">
-                    <h3 className="yk-card-title"><Icon name="domain" /> Niveaux actifs ({classes.length})</h3>
-                    <div className="yk-table-scroll">
-                      <table className="yk-table">
-                        <thead><tr><th>Intitulé de classe</th><th>Montant scolarité</th></tr></thead>
-                        <tbody>
-                          {classes.length === 0 ? (
-                            <tr><td colSpan="2" className="yk-empty-row">Aucune classe configurée pour le moment.</td></tr>
-                          ) : classes.map(cl => (
-                            <tr key={cl.id}><td className="yk-strong">{cl.nom}</td><td>{parseFloat(cl.frais_scolarite).toLocaleString()} F CFA</td></tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                  <ListToolbar
+                    searchValue={searchTerm}
+                    onSearchChange={setSearchTerm}
+                    searchPlaceholder="Rechercher une classe…"
+                    onExportPdf={() => exporterPDF(
+                      'Liste des classes et tarifs',
+                      ['Intitulé de classe', 'Frais de scolarité'],
+                      filteredClasses.map(cl => [cl.nom, formatMontant(cl.frais_scolarite)]),
+                      'liste_classes'
+                    )}
+                    onCreate={() => openCreateModal('classe')}
+                    createLabel="Nouvelle classe"
+                  />
+
+                  <div className="yk-table-scroll">
+                    <table className="yk-table">
+                      <thead><tr><th>Intitulé de classe</th><th>Montant scolarité</th><th>Actions</th></tr></thead>
+                      <tbody>
+                        {pageClasses.length === 0 ? (
+                          <tr><td colSpan={3} className="yk-empty-row">Aucune classe configurée pour le moment.</td></tr>
+                        ) : pageClasses.map(cl => (
+                          <tr key={cl.id}>
+                            <td className="yk-strong">{cl.nom}</td>
+                            <td>{formatMontant(cl.frais_scolarite)}</td>
+                            <td>
+                              <div style={{ display: 'flex', gap: '6px' }}>
+                                <button className="yk-btn yk-btn-ghost yk-btn-sm" onClick={() => openEditModal('classe', cl)}>
+                                  <Icon name="edit" style={{ fontSize: '16px' }} />
+                                </button>
+                                <button className="yk-btn yk-btn-sm" style={{ background: '#fef2f2', color: '#dc2626' }} onClick={() => requestDelete('classe', cl.id, cl.nom)}>
+                                  <Icon name="delete" style={{ fontSize: '16px' }} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
+                  <Pagination page={pages.classes} totalPages={totalPages(filteredClasses)} totalItems={filteredClasses.length} onChange={p => setPage('classes', p)} />
                 </div>
               )}
 
               {/* ---------------- INSCRIPTIONS ---------------- */}
               {activeTab === 'inscriptions' && (
-                <div className="yk-grid-layout yk-fade-in">
-                  <div className="yk-card yk-card-form">
-                    <h3 className="yk-card-title"><Icon name="how_to_reg" /> Associer un élève à une classe</h3>
-                    <form onSubmit={handleInscriptionSubmit} className="yk-form">
-                      <label className="yk-field">
-                        <span className="yk-label">Élève</span>
-                        <select value={inscriptionForm.eleve_id} onChange={e => setInscriptionForm({ ...inscriptionForm, eleve_id: e.target.value })} required className="yk-input">
-                          <option value="">-- Choisir l'élève --</option>
-                          {eleves.map(el => <option key={el.id} value={el.id}>{el.matricule} - {el.nom} {el.prenom}</option>)}
-                        </select>
-                      </label>
-                      <label className="yk-field">
-                        <span className="yk-label">Classe</span>
-                        <select value={inscriptionForm.classe_id} onChange={e => setInscriptionForm({ ...inscriptionForm, classe_id: e.target.value })} required className="yk-input">
-                          <option value="">-- Choisir la classe --</option>
-                          {classes.map(cl => <option key={cl.id} value={cl.id}>{cl.nom}</option>)}
-                        </select>
-                      </label>
-                      <button type="submit" className="yk-btn yk-btn-amber yk-btn-block"><Icon name="task_alt" /> Valider l'inscription</button>
-                    </form>
+                <div className="yk-card yk-fade-in">
+                  <div className="yk-card-header">
+                    <h3 className="yk-card-title" style={{ margin: 0, border: 'none', padding: 0 }}>
+                      <Icon name="fact_check" /> Registre des inscriptions ({filteredInscriptions.length})
+                    </h3>
                   </div>
 
-                  <div className="yk-card yk-card-table">
-                    <h3 className="yk-card-title"><Icon name="fact_check" /> Registre des inscriptions ({inscriptions.length})</h3>
-                    <div className="yk-table-scroll">
-                      <table className="yk-table">
-                        <thead><tr><th>Élève</th><th>Classe assignée</th><th>Année</th></tr></thead>
-                        <tbody>
-                          {inscriptions.length === 0 ? (
-                            <tr><td colSpan="3" className="yk-empty-row">Aucune inscription enregistrée pour le moment.</td></tr>
-                          ) : inscriptions.map(ins => (
-                            <tr key={ins.id}><td className="yk-strong">{ins.nom} {ins.prenom} ({ins.matricule})</td><td>{ins.classe_nom}</td><td>{ins.annee_libelle}</td></tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                  <ListToolbar
+                    searchValue={searchTerm}
+                    onSearchChange={setSearchTerm}
+                    searchPlaceholder="Rechercher (nom, matricule…)"
+                    classes={classes}
+                    classeFilter={classeFilter}
+                    onClasseFilterChange={setClasseFilter}
+                    onExportPdf={() => exporterPDF(
+                      "Registre des inscriptions",
+                      ['Élève', 'Classe assignée', 'Année'],
+                      filteredInscriptions.map(ins => [`${ins.nom} ${ins.prenom} (${ins.matricule})`, ins.classe_nom, ins.annee_libelle]),
+                      'liste_inscriptions'
+                    )}
+                    onCreate={() => openCreateModal('inscription')}
+                    createLabel="Nouvelle inscription"
+                  />
+
+                  <div className="yk-table-scroll">
+                    <table className="yk-table">
+                      <thead><tr><th>Élève</th><th>Classe assignée</th><th>Année</th><th>Actions</th></tr></thead>
+                      <tbody>
+                        {pageInscriptions.length === 0 ? (
+                          <tr><td colSpan={4} className="yk-empty-row">Aucune inscription enregistrée pour le moment.</td></tr>
+                        ) : pageInscriptions.map(ins => (
+                          <tr key={ins.id}>
+                            <td className="yk-strong">{ins.nom} {ins.prenom} ({ins.matricule})</td>
+                            <td>{ins.classe_nom}</td>
+                            <td>{ins.annee_libelle}</td>
+                            <td>
+                              <div style={{ display: 'flex', gap: '6px' }}>
+                                <button className="yk-btn yk-btn-ghost yk-btn-sm" onClick={() => openEditModal('inscription', ins)}>
+                                  <Icon name="edit" style={{ fontSize: '16px' }} />
+                                </button>
+                                <button className="yk-btn yk-btn-sm" style={{ background: '#fef2f2', color: '#dc2626' }} onClick={() => requestDelete('inscription', ins.id, `${ins.nom} ${ins.prenom}`)}>
+                                  <Icon name="delete" style={{ fontSize: '16px' }} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
+                  <Pagination page={pages.inscriptions} totalPages={totalPages(filteredInscriptions)} totalItems={filteredInscriptions.length} onChange={p => setPage('inscriptions', p)} />
                 </div>
               )}
 
               {/* ---------------- COMPTABILITÉ ---------------- */}
               {activeTab === 'comptabilite' && (
                 <div className="yk-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-                  
+
                   <div>
                     <h2 style={{ fontSize: '16px', fontWeight: 700, textTransform: 'uppercase', color: 'var(--yk-blue)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <Icon name="arrow_circle_up" style={{ color: 'var(--yk-green)' }} /> Section 1 : Flux Entrants (Recettes)
                     </h2>
-                    <div className="yk-grid-layout">
-                      <div className="yk-card yk-card-form">
-                        <h3 className="yk-card-title"><Icon name="point_of_sale" /> Enregistrer un versement</h3>
-                        <form onSubmit={handlePaiementSubmit} className="yk-form">
-                          <label className="yk-field">
-                            <span className="yk-label">Élève inscrit</span>
-                            <select value={paiementForm.inscription_id} onChange={e => setPaiementForm({ ...paiementForm, inscription_id: e.target.value })} required className="yk-input">
-                              <option value="">-- Choisir un élève inscrit --</option>
-                              {inscriptions.map(ins => (
-                                <option key={ins.id} value={ins.id}>{ins.matricule} - {ins.nom} {ins.prenom} ({ins.classe_nom})</option>
-                              ))}
-                            </select>
-                          </label>
-                          <label className="yk-field">
-                            <span className="yk-label">Montant (F CFA)</span>
-                            <input type="number" placeholder="Ex : 25000" value={paiementForm.montant} onChange={e => setPaiementForm({ ...paiementForm, montant: e.target.value })} required className="yk-input" />
-                          </label>
-
-                          <label className="yk-field">
-                            <span className="yk-label">Tranche / Type de versement</span>
-                            <select value={paiementForm.type_versement} onChange={e => setPaiementForm({ ...paiementForm, type_versement: e.target.value })} required className="yk-input">
-                              <option value="Tranche 1">Tranche 1</option>
-                              <option value="Tranche 2">Tranche 2</option>
-                              <option value="Tranche 3">Tranche 3</option>
-                              <option value="Frais Inscription">Frais d'Inscription</option>
-                              <option value="Totalité Scolarité">Totalité Scolarité</option>
-                            </select>
-                          </label>
-
-                          <label className="yk-field">
-                            <span className="yk-label">Mode de paiement</span>
-                            <select value={paiementForm.mode_paiement} onChange={e => setPaiementForm({ ...paiementForm, mode_paiement: e.target.value })} className="yk-input">
-                              <option value="CASH">Espèces (Caisse)</option>
-                              <option value="MOMO">MTN Mobile Money</option>
-                              <option value="OM">Orange Money</option>
-                              <option value="VIREMENT">Virement bancaire</option>
-                            </select>
-                          </label>
-                          <label className="yk-field">
-                            <span className="yk-label">Référence transaction (optionnel)</span>
-                            <input type="text" placeholder="Générée automatiquement" value={paiementForm.reference_banque} disabled className="yk-input" />
-                          </label>
-                          <button type="submit" className="yk-btn yk-btn-blue yk-btn-block"><Icon name="payments" /> Encaisser le versement</button>
-                        </form>
+                    <div className="yk-card">
+                      <div className="yk-card-header">
+                        <h3 className="yk-card-title" style={{ margin: 0, border: 'none', padding: 0 }}>
+                          <Icon name="receipt_long" /> Journal de caisse ({filteredPaiements.length} entrées)
+                        </h3>
                       </div>
-
-                      <div className="yk-card yk-card-table">
-                        <h3 className="yk-card-title"><Icon name="receipt_long" /> Journal de caisse ({paiements.length} entrées)</h3>
-                        <div className="yk-table-scroll">
-                          <table className="yk-table">
-                            <thead>
-                              <tr>
-                                <th>Élève</th>
-                                <th>Versement</th>
-                                <th>Tranche</th>
-                                <th>Action</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {paiements.length === 0 ? (
-                                <tr><td colSpan="4" className="yk-empty-row">Aucun encaissement enregistré.</td></tr>
-                              ) : (
-                                paiements.map(p => (
-                                  <tr key={p.id}>
-                                    <td>
-                                      <span className="yk-strong">{p.nom} {p.prenom}</span>
-                                      <br /><small className="yk-muted">{p.numero_recu || 'REC-N/A'}</small>
-                                    </td>
-                                    <td className="yk-text-blue yk-strong">{parseFloat(p.montant).toLocaleString()} F</td>
-                                    <td><span className="yk-badge">{p.type_versement || 'Tranche 1'}</span></td>
-                                    <td>
+                      <ListToolbar
+                        searchValue={searchTerm}
+                        onSearchChange={setSearchTerm}
+                        searchPlaceholder="Rechercher un versement…"
+                        classes={classes}
+                        classeFilter={classeFilter}
+                        onClasseFilterChange={setClasseFilter}
+                        onExportPdf={() => exporterPDF(
+                          'Journal de caisse — versements',
+                          ['Élève', 'N° reçu', 'Montant', 'Tranche'],
+                          filteredPaiements.map(p => [`${p.nom} ${p.prenom}`, p.numero_recu || 'REC-N/A', formatMontant(p.montant), p.type_versement || 'Tranche 1']),
+                          'journal_caisse'
+                        )}
+                        onCreate={() => openCreateModal('paiement')}
+                        createLabel="Nouveau versement"
+                      />
+                      <div className="yk-table-scroll">
+                        <table className="yk-table">
+                          <thead>
+                            <tr>
+                              <th>Élève</th>
+                              <th>Versement</th>
+                              <th>Tranche</th>
+                              <th>Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pagePaiements.length === 0 ? (
+                              <tr><td colSpan={4} className="yk-empty-row">Aucun encaissement enregistré.</td></tr>
+                            ) : (
+                              pagePaiements.map(p => (
+                                <tr key={p.id}>
+                                  <td>
+                                    <span className="yk-strong">{p.nom} {p.prenom}</span>
+                                    <br /><small className="yk-muted">{p.numero_recu || 'REC-N/A'}</small>
+                                  </td>
+                                  <td className="yk-text-blue yk-strong">{formatMontant(p.montant)}</td>
+                                  <td><span className="yk-badge">{p.type_versement || 'Tranche 1'}</span></td>
+                                  <td>
+                                    <div style={{ display: 'flex', gap: '6px' }}>
                                       <button onClick={() => imprimerRecu(p)} className="yk-btn yk-btn-ghost yk-btn-sm">
                                         <Icon name="print" style={{ fontSize: '16px' }} />
                                       </button>
-                                    </td>
-                                  </tr>
-                                ))
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
+                                      <button className="yk-btn yk-btn-ghost yk-btn-sm" onClick={() => openEditModal('paiement', p)}>
+                                        <Icon name="edit" style={{ fontSize: '16px' }} />
+                                      </button>
+                                      <button className="yk-btn yk-btn-sm" style={{ background: '#fef2f2', color: '#dc2626' }} onClick={() => requestDelete('paiement', p.id, `le versement de ${p.nom} ${p.prenom}`)}>
+                                        <Icon name="delete" style={{ fontSize: '16px' }} />
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
                       </div>
+                      <Pagination page={pages.paiements} totalPages={totalPages(filteredPaiements)} totalItems={filteredPaiements.length} onChange={p => setPage('paiements', p)} />
                     </div>
                   </div>
 
@@ -678,79 +983,66 @@ const AdminDashboard = () => {
                     <h2 style={{ fontSize: '16px', fontWeight: 700, textTransform: 'uppercase', color: '#e11d48', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <Icon name="arrow_circle_down" style={{ color: 'var(--yk-red)' }} /> Section 2 : Flux Sortants (Charges & Dépenses)
                     </h2>
-                    <div className="yk-grid-layout">
-                      
-                      <div className="yk-card yk-card-form" style={{ borderTop: '3px solid #e11d48' }}>
-                        <h3 className="yk-card-title" style={{ color: '#e11d48' }}><Icon name="money_off" /> Déclarer une dépense</h3>
-                        <form onSubmit={handleDepenseSubmit} className="yk-form">
-                          <label className="yk-field">
-                            <span className="yk-label">Intitulé de la dépense</span>
-                            <input type="text" placeholder="Ex: Facture Eneo Mai" value={depenseForm.titre} onChange={e => setDepenseForm({ ...depenseForm, titre: e.target.value })} required className="yk-input" />
-                          </label>
-                          <label className="yk-field">
-                            <span className="yk-label">Catégorie de charge</span>
-                            <select value={depenseForm.categorie} onChange={e => setDepenseForm({ ...depenseForm, categorie: e.target.value })} className="yk-input">
-                              <option value="Fournitures">Fournitures & Matériels</option>
-                              <option value="Salaires">Salaires & Vacations</option>
-                              <option value="Maintenance">Maintenance Locaux</option>
-                              <option value="Factures">Factures (Eau/Élec/Net)</option>
-                              <option value="Impôts">Impôts et Taxes</option>
-                              <option value="Autre">Autre charge d'exploitation</option>
-                            </select>
-                          </label>
-                          <label className="yk-field">
-                            <span className="yk-label">Montant décaissé (F CFA)</span>
-                            <input type="number" placeholder="Ex: 45000" value={depenseForm.montant} onChange={e => setDepenseForm({ ...depenseForm, montant: e.target.value })} required className="yk-input" />
-                          </label>
-                          <label className="yk-field">
-                            <span className="yk-label">Mode de décaissement</span>
-                            <select value={depenseForm.mode_paiement} onChange={e => setDepenseForm({ ...depenseForm, mode_paiement: e.target.value })} className="yk-input">
-                              <option value="CASH">Espèces (Fond de caisse)</option>
-                              <option value="MOMO">Mobile Money</option>
-                              <option value="VIREMENT">Chèque / Virement</option>
-                            </select>
-                          </label>
-                          <label className="yk-field">
-                            <span className="yk-label">Description / Notes</span>
-                            <input type="text" placeholder="Détails supplémentaires" value={depenseForm.description} onChange={e => setDepenseForm({ ...depenseForm, description: e.target.value })} className="yk-input" />
-                          </label>
-                          <button type="submit" className="yk-btn yk-btn-block" style={{ background: '#e11d48', color: '#fff' }}><Icon name="output" /> Enregistrer la dépense</button>
-                        </form>
+                    <div className="yk-card">
+                      <div className="yk-card-header">
+                        <h3 className="yk-card-title" style={{ margin: 0, border: 'none', padding: 0, color: '#e11d48' }}>
+                          <Icon name="menu_book" /> Journal d'historique des dépenses ({filteredDepenses.length} lignes)
+                        </h3>
                       </div>
-
-                      <div className="yk-card yk-card-table">
-                        <h3 className="yk-card-title"><Icon name="menu_book" /> Journal d'historique des dépenses ({depenses.length} lignes)</h3>
-                        <div className="yk-table-scroll">
-                          <table className="yk-table">
-                            <thead>
-                              <tr>
-                                <th>Libellé / Motif</th>
-                                <th>Catégorie</th>
-                                <th>Montant</th>
-                                <th>Mode</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {depenses.length === 0 ? (
-                                <tr><td colSpan="4" className="yk-empty-row">Aucune dépense enregistrée sur cette période.</td></tr>
-                              ) : (
-                                depenses.map(d => (
-                                  <tr key={d.id}>
-                                    <td>
-                                      <span className="yk-strong" style={{ color: 'var(--yk-ink)' }}>{d.titre}</span>
-                                      {d.description && <br />}<small className="yk-muted">{d.description}</small>
-                                    </td>
-                                    <td><span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--yk-slate)' }}>{d.categorie}</span></td>
-                                    <td style={{ color: '#dc2626', fontWeight: 700 }}>-{parseFloat(d.montant).toLocaleString()} F</td>
-                                    <td><span className="yk-badge" style={{ background: '#f1f5f9', color: 'var(--yk-slate)' }}>{d.mode_paiement}</span></td>
-                                  </tr>
-                                ))
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
+                      <ListToolbar
+                        searchValue={searchTerm}
+                        onSearchChange={setSearchTerm}
+                        searchPlaceholder="Rechercher une dépense…"
+                        onExportPdf={() => exporterPDF(
+                          "Journal des dépenses",
+                          ['Libellé', 'Catégorie', 'Montant', 'Mode'],
+                          filteredDepenses.map(d => [d.titre, d.categorie, formatMontant(d.montant), d.mode_paiement]),
+                          'journal_depenses'
+                        )}
+                        onCreate={() => openCreateModal('depense')}
+                        createLabel="Nouvelle dépense"
+                      />
+                      <div className="yk-table-scroll">
+                        <table className="yk-table">
+                          <thead>
+                            <tr>
+                              <th>Libellé / Motif</th>
+                              <th>Catégorie</th>
+                              <th>Montant</th>
+                              <th>Mode</th>
+                              <th>Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pageDepenses.length === 0 ? (
+                              <tr><td colSpan={5} className="yk-empty-row">Aucune dépense enregistrée sur cette période.</td></tr>
+                            ) : (
+                              pageDepenses.map(d => (
+                                <tr key={d.id}>
+                                  <td>
+                                    <span className="yk-strong" style={{ color: 'var(--yk-ink)' }}>{d.titre}</span>
+                                    {d.description && <br />}<small className="yk-muted">{d.description}</small>
+                                  </td>
+                                  <td><span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--yk-slate)' }}>{d.categorie}</span></td>
+                                  <td style={{ color: '#dc2626', fontWeight: 700 }}>-{formatMontant(d.montant)}</td>
+                                  <td><span className="yk-badge" style={{ background: '#f1f5f9', color: 'var(--yk-slate)' }}>{d.mode_paiement}</span></td>
+                                  <td>
+                                    <div style={{ display: 'flex', gap: '6px' }}>
+                                      <button className="yk-btn yk-btn-ghost yk-btn-sm" onClick={() => openEditModal('depense', d)}>
+                                        <Icon name="edit" style={{ fontSize: '16px' }} />
+                                      </button>
+                                      <button className="yk-btn yk-btn-sm" style={{ background: '#fef2f2', color: '#dc2626' }} onClick={() => requestDelete('depense', d.id, d.titre)}>
+                                        <Icon name="delete" style={{ fontSize: '16px' }} />
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
                       </div>
-
+                      <Pagination page={pages.depenses} totalPages={totalPages(filteredDepenses)} totalItems={filteredDepenses.length} onChange={p => setPage('depenses', p)} />
                     </div>
                   </div>
 
@@ -760,6 +1052,164 @@ const AdminDashboard = () => {
           )}
         </main>
       </div>
+
+      {/* ---------------- MODALES DE CRÉATION / ÉDITION ---------------- */}
+      {modal.type === 'eleve' && (
+        <Modal title={modal.mode === 'edit' ? "Modifier l'élève" : 'Enregistrer un élève'} icon="person_add" onClose={closeModal} accent="#0e9f6e">
+          <form onSubmit={handleEleveSubmit} className="yk-form">
+            <label className="yk-field">
+              <span className="yk-label">Matricule</span>
+              <input type="text" placeholder="Généré automatiquement" value={eleveForm.matricule} disabled className="yk-input" />
+            </label>
+            <label className="yk-field">
+              <span className="yk-label">Nom</span>
+              <input type="text" placeholder="Nom de famille" value={eleveForm.nom} onChange={e => setEleveForm({ ...eleveForm, nom: e.target.value })} required className="yk-input" />
+            </label>
+            <label className="yk-field">
+              <span className="yk-label">Prénom</span>
+              <input type="text" placeholder="Prénom" value={eleveForm.prenom} onChange={e => setEleveForm({ ...eleveForm, prenom: e.target.value })} required className="yk-input" />
+            </label>
+            <label className="yk-field">
+              <span className="yk-label">Date de naissance</span>
+              <input type="date" value={eleveForm.date_naissance} onChange={e => setEleveForm({ ...eleveForm, date_naissance: e.target.value })} required className="yk-input" />
+            </label>
+            <label className="yk-field">
+              <span className="yk-label">Genre</span>
+              <select value={eleveForm.genre} onChange={e => setEleveForm({ ...eleveForm, genre: e.target.value })} className="yk-input">
+                <option value="M">Masculin</option>
+                <option value="F">Féminin</option>
+              </select>
+            </label>
+            <button type="submit" className="yk-btn yk-btn-green yk-btn-block"><Icon name="save" /> {modal.mode === 'edit' ? 'Enregistrer les modifications' : 'Créer la fiche'}</button>
+          </form>
+        </Modal>
+      )}
+
+      {modal.type === 'classe' && (
+        <Modal title={modal.mode === 'edit' ? 'Modifier la classe' : 'Nouvelle classe'} icon="add_business" onClose={closeModal} accent="#0369a1">
+          <form onSubmit={handleClasseSubmit} className="yk-form">
+            <label className="yk-field">
+              <span className="yk-label">Nom de la classe</span>
+              <input type="text" placeholder="Ex : SIL 1" value={classeForm.nom} onChange={e => setClasseForm({ ...classeForm, nom: e.target.value })} required className="yk-input" />
+            </label>
+            <label className="yk-field">
+              <span className="yk-label">Frais de scolarité (F CFA)</span>
+              <input type="number" placeholder="Ex : 150000" value={classeForm.frais_scolarite} onChange={e => setClasseForm({ ...classeForm, frais_scolarite: e.target.value })} required className="yk-input" />
+            </label>
+            <button type="submit" className="yk-btn yk-btn-blue yk-btn-block"><Icon name="save" /> {modal.mode === 'edit' ? 'Enregistrer les modifications' : 'Créer la classe'}</button>
+          </form>
+        </Modal>
+      )}
+
+      {modal.type === 'inscription' && (
+        <Modal title={modal.mode === 'edit' ? "Modifier l'inscription" : 'Associer un élève à une classe'} icon="how_to_reg" onClose={closeModal} accent="#c2790a">
+          <form onSubmit={handleInscriptionSubmit} className="yk-form">
+            <label className="yk-field">
+              <span className="yk-label">Élève</span>
+              <select value={inscriptionForm.eleve_id} onChange={e => setInscriptionForm({ ...inscriptionForm, eleve_id: e.target.value })} required className="yk-input">
+                <option value="">-- Choisir l'élève --</option>
+                {eleves.map(el => <option key={el.id} value={el.id}>{el.matricule} - {el.nom} {el.prenom}</option>)}
+              </select>
+            </label>
+            <label className="yk-field">
+              <span className="yk-label">Classe</span>
+              <select value={inscriptionForm.classe_id} onChange={e => setInscriptionForm({ ...inscriptionForm, classe_id: e.target.value })} required className="yk-input">
+                <option value="">-- Choisir la classe --</option>
+                {classes.map(cl => <option key={cl.id} value={cl.id}>{cl.nom}</option>)}
+              </select>
+            </label>
+            <button type="submit" className="yk-btn yk-btn-amber yk-btn-block"><Icon name="task_alt" /> {modal.mode === 'edit' ? 'Enregistrer les modifications' : "Valider l'inscription"}</button>
+          </form>
+        </Modal>
+      )}
+
+      {modal.type === 'paiement' && (
+        <Modal title={modal.mode === 'edit' ? 'Modifier le versement' : 'Enregistrer un versement'} icon="point_of_sale" onClose={closeModal} accent="#0369a1">
+          <form onSubmit={handlePaiementSubmit} className="yk-form">
+            <label className="yk-field">
+              <span className="yk-label">Élève inscrit</span>
+              <select value={paiementForm.inscription_id} onChange={e => setPaiementForm({ ...paiementForm, inscription_id: e.target.value })} required className="yk-input">
+                <option value="">-- Choisir un élève inscrit --</option>
+                {inscriptions.map(ins => (
+                  <option key={ins.id} value={ins.id}>{ins.matricule} - {ins.nom} {ins.prenom} ({ins.classe_nom})</option>
+                ))}
+              </select>
+            </label>
+            <label className="yk-field">
+              <span className="yk-label">Montant (F CFA)</span>
+              <input type="number" placeholder="Ex : 25000" value={paiementForm.montant} onChange={e => setPaiementForm({ ...paiementForm, montant: e.target.value })} required className="yk-input" />
+            </label>
+            <label className="yk-field">
+              <span className="yk-label">Tranche / Type de versement</span>
+              <select value={paiementForm.type_versement} onChange={e => setPaiementForm({ ...paiementForm, type_versement: e.target.value })} required className="yk-input">
+                <option value="Tranche 1">Tranche 1</option>
+                <option value="Tranche 2">Tranche 2</option>
+                <option value="Tranche 3">Tranche 3</option>
+                <option value="Frais Inscription">Frais d'Inscription</option>
+                <option value="Totalité Scolarité">Totalité Scolarité</option>
+              </select>
+            </label>
+            <label className="yk-field">
+              <span className="yk-label">Mode de paiement</span>
+              <select value={paiementForm.mode_paiement} onChange={e => setPaiementForm({ ...paiementForm, mode_paiement: e.target.value })} className="yk-input">
+                <option value="CASH">Espèces (Caisse)</option>
+                <option value="MOMO">MTN Mobile Money</option>
+                <option value="OM">Orange Money</option>
+                <option value="VIREMENT">Virement bancaire</option>
+              </select>
+            </label>
+            <label className="yk-field">
+              <span className="yk-label">Référence transaction (optionnel)</span>
+              <input type="text" placeholder="Générée automatiquement" value={paiementForm.reference_banque} disabled className="yk-input" />
+            </label>
+            <button type="submit" className="yk-btn yk-btn-blue yk-btn-block"><Icon name="payments" /> {modal.mode === 'edit' ? 'Enregistrer les modifications' : 'Encaisser le versement'}</button>
+          </form>
+        </Modal>
+      )}
+
+      {modal.type === 'depense' && (
+        <Modal title={modal.mode === 'edit' ? 'Modifier la dépense' : 'Déclarer une dépense'} icon="money_off" onClose={closeModal} accent="#e11d48">
+          <form onSubmit={handleDepenseSubmit} className="yk-form">
+            <label className="yk-field">
+              <span className="yk-label">Intitulé de la dépense</span>
+              <input type="text" placeholder="Ex: Facture Eneo Mai" value={depenseForm.titre} onChange={e => setDepenseForm({ ...depenseForm, titre: e.target.value })} required className="yk-input" />
+            </label>
+            <label className="yk-field">
+              <span className="yk-label">Catégorie de charge</span>
+              <select value={depenseForm.categorie} onChange={e => setDepenseForm({ ...depenseForm, categorie: e.target.value })} className="yk-input">
+                <option value="Fournitures">Fournitures & Matériels</option>
+                <option value="Salaires">Salaires & Vacations</option>
+                <option value="Maintenance">Maintenance Locaux</option>
+                <option value="Factures">Factures (Eau/Élec/Net)</option>
+                <option value="Impôts">Impôts et Taxes</option>
+                <option value="Autre">Autre charge d'exploitation</option>
+              </select>
+            </label>
+            <label className="yk-field">
+              <span className="yk-label">Montant décaissé (F CFA)</span>
+              <input type="number" placeholder="Ex: 45000" value={depenseForm.montant} onChange={e => setDepenseForm({ ...depenseForm, montant: e.target.value })} required className="yk-input" />
+            </label>
+            <label className="yk-field">
+              <span className="yk-label">Mode de décaissement</span>
+              <select value={depenseForm.mode_paiement} onChange={e => setDepenseForm({ ...depenseForm, mode_paiement: e.target.value })} className="yk-input">
+                <option value="CASH">Espèces (Fond de caisse)</option>
+                <option value="MOMO">Mobile Money</option>
+                <option value="VIREMENT">Chèque / Virement</option>
+              </select>
+            </label>
+            <label className="yk-field">
+              <span className="yk-label">Description / Notes</span>
+              <input type="text" placeholder="Détails supplémentaires" value={depenseForm.description} onChange={e => setDepenseForm({ ...depenseForm, description: e.target.value })} className="yk-input" />
+            </label>
+            <button type="submit" className="yk-btn yk-btn-block" style={{ background: '#e11d48', color: '#fff' }}><Icon name="output" /> {modal.mode === 'edit' ? 'Enregistrer les modifications' : 'Enregistrer la dépense'}</button>
+          </form>
+        </Modal>
+      )}
+
+      {/* ---------------- CONFIRMATION DE SUPPRESSION ---------------- */}
+      {confirmState.type && (
+        <ConfirmDialog label={confirmState.label} onConfirm={confirmDelete} onCancel={cancelDelete} />
+      )}
     </div>
   );
 };
@@ -952,6 +1402,12 @@ const CSS = `
   .yk-title-danger { color: var(--yk-red); border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
   .yk-card-header .yk-card-title { margin: 0; padding: 0; border: none; }
 
+  .yk-toolbar {
+    display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;
+    gap: 10px; margin-bottom: 14px;
+  }
+  .yk-toolbar-filters { display: flex; gap: 8px; flex-wrap: wrap; }
+
   .yk-form { display: flex; flex-direction: column; gap: 14px; }
   .yk-field { display: flex; flex-direction: column; gap: 5px; }
   .yk-label { font-size: 12px; color: var(--yk-muted); font-weight: 600; }
@@ -999,6 +1455,33 @@ const CSS = `
     display: inline-block; padding: 3px 9px; border-radius: 999px; background: #eef2ff;
     color: var(--yk-indigo); font-size: 11.5px; font-weight: 700;
   }
+
+  .yk-pagination {
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 10px; margin-top: 14px; padding-top: 14px;
+    border-top: 1px solid var(--yk-border);
+  }
+
+  .yk-modal-backdrop {
+    position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100; padding: 20px; backdrop-filter: blur(2px);
+  }
+  .yk-modal {
+    background: #fff; border-radius: var(--yk-radius); width: 100%; max-width: 460px;
+    max-height: 88vh; overflow-y: auto; box-shadow: 0 20px 50px -12px rgba(0,0,0,0.35);
+    animation: yk-fade 0.18s ease;
+  }
+  .yk-modal-sm { max-width: 400px; }
+  .yk-modal-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 16px 20px; border-bottom: 1px solid var(--yk-border); border-top: 3px solid;
+  }
+  .yk-modal-close {
+    border: none; background: #f1f5f9; border-radius: 8px; padding: 6px;
+    display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--yk-slate);
+  }
+  .yk-modal-body { padding: 20px; }
 
   @media (max-width: 1080px) {
     .yk-grid-layout { grid-template-columns: 1fr; }

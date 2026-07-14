@@ -12,8 +12,6 @@ const paiementRoutes = require('./src/routes/paiementRoutes');
 const auditRoutes = require('./src/routes/auditRoutes');
 const etablissementRoutes = require('./src/routes/etablissementRoutes');
 
-
-
 dotenv.config();
 
 const app = express();

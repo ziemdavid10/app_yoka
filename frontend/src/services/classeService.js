@@ -1,14 +1,14 @@
-const API_URL = 'http://localhost:3000/api/classes';
-// Génération dynamique des en-têtes sécurisés
+const API_URL = '/api/classes';
+
 const getHeaders = () => ({
   'Content-Type': 'application/json',
   'Authorization': `Bearer ${localStorage.getItem('token')}`
 });
 
-export const fetchClasses = async () => {
-  const response = await fetch(API_URL, { headers: getHeaders() });
+export const fetchClasses = async (page = 1, limit = 10) => {
+  const response = await fetch(`${API_URL}?page=${page}&limit=${limit}`, { headers: getHeaders() });
   if (!response.ok) throw new Error('Impossible de charger les classes.');
-  return await response.json();
+  return await response.json(); // { data, pagination }
 };
 
 export const saveClasse = async (classeData) => {
@@ -18,6 +18,27 @@ export const saveClasse = async (classeData) => {
     body: JSON.stringify(classeData)
   });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error);
+  if (!response.ok) throw new Error(data.error || 'Erreur lors de la création.');
+  return data;
+};
+
+export const updateClasse = async (id, classeData) => {
+  const response = await fetch(`${API_URL}/${id}`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify(classeData)
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Erreur lors de la modification.');
+  return data;
+};
+
+export const deleteClasse = async (id) => {
+  const response = await fetch(`${API_URL}/${id}`, {
+    method: 'DELETE',
+    headers: getHeaders()
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Erreur lors de la suppression.');
   return data;
 };
