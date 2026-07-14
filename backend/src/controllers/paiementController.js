@@ -1,7 +1,8 @@
+const crypto = require('crypto'); // 🛡️ Requis pour la génération de chaînes uniques
 const db = require('../config/db');
 const { enregistrerAudit } = require('../utils/auditLogger');
 
-// 1. Enregistrer un versement (savePaiement)
+// 1. Enregistrer un versement (savePaiement avec Génération Automatique)
 exports.savePaiement = async (req, res) => {
   if (!req.user) return res.status(401).json({ error: "Profil utilisateur manquant." });
   
@@ -14,7 +15,7 @@ exports.savePaiement = async (req, res) => {
   }
 
   try {
-    // Calcul du reste à payer actuel avant d'accepter le nouveau versement
+    // A. Calcul du reste à payer actuel avant d'accepter le nouveau versement
     const [verifRows] = await db.execute(`
       SELECT c.frais_scolarite, IFNULL(SUM(p.montant), 0) AS total_deja_paye
       FROM inscriptions i
@@ -35,8 +36,25 @@ exports.savePaiement = async (req, res) => {
       return res.status(400).json({ error: `Le montant dépasse le reste à payer attendu (${resteAPayer} F CFA).` });
     }
 
-    // FIX : Génération du numéro de reçu unique requis par la base de données
-    const numero_recu = `REC-${Date.now()}`;
+    // B. GÉNÉRATION PROFESSIONNELLE DU NUMÉRO DE REÇU / TRANSACTION
+    // 1. Récupération du code unique de l'établissement
+    const [etabRows] = await db.execute('SELECT code_unique FROM etablissements WHERE id = ?', [etablissement_id]);
+    const code_etablissement = etabRows.length > 0 ? etabRows[0].code_unique : 'GEN';
+    const codeEtabPropre = code_etablissement.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().substring(0, 8);
+
+    // 2. Construction temporelle (AAMMJJ)
+    const date = new Date();
+    const aa = String(date.getFullYear()).slice(-2);
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const jj = String(date.getDate()).padStart(2, '0');
+    
+    // 3. Clé de hachage unique pour éviter les collisions en millisecondes
+    const suffixeAleatoire = crypto.randomBytes(3).toString('hex').toUpperCase().slice(0, 5);
+    
+    // Résultat Ex: REC-LYCBIL-260713-X7A1B
+    const numero_recu = `REC-${codeEtabPropre}-${aa}${mm}${jj}-${suffixeAleatoire}`;
+
+    // C. Insertion sécurisée en Base de données
     const sql = `
       INSERT INTO paiements (inscription_id, montant, type_versement, mode_paiement, reference_banque, numero_recu, etablissement_id)
       VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -52,10 +70,19 @@ exports.savePaiement = async (req, res) => {
       etablissement_id
     ]);
 
-    // TRACE AUDIT
-    await enregistrerAudit(req, 'ENREGISTREMENT_PAIEMENT', `Encaissement de ${versement} F CFA. Reçu : ${numero_recu} (Inscription ID: ${inscription_id})`);
+    // TRACE AUDIT FINANCIÈRE
+    await enregistrerAudit(
+      req, 
+      'ENREGISTREMENT_PAIEMENT', 
+      `Encaissement de ${versement} F CFA (Mode: ${mode_paiement || 'ESPECES'}). Réf transaction : ${numero_recu}`
+    );
 
-    return res.status(201).json({ message: "Paiement enregistré avec succès !", paiementId: result.insertId });
+    return res.status(201).json({ 
+      message: "Paiement enregistré avec succès !", 
+      paiementId: result.insertId,
+      numero_recu: numero_recu 
+    });
+    
   } catch (error) {
     console.error("Erreur lors de l'enregistrement du versement :", error);
     return res.status(500).json({ error: "Erreur interne lors du traitement du versement." });
@@ -135,11 +162,9 @@ exports.getDebiteurs = async (req, res) => {
 exports.enregistrerDepense = async (req, res) => {
   if (!req.user) return res.status(401).json({ error: "Profil utilisateur manquant." });
   
-  // CORRECTION : On extrait 'titre' au lieu de 'motif' pour correspondre au frontend et à la BDD
   const { titre, montant, categorie, description, mode_paiement } = req.body;
   const etablissement_id = req.user.etablissement_id;
 
-  // CORRECTION : Validation sur 'titre'
   if (!titre || !montant) {
     return res.status(400).json({ error: "Le titre et le montant sont obligatoires." });
   }
@@ -150,7 +175,6 @@ exports.enregistrerDepense = async (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?)
     `, [titre, montant, categorie || 'AUTRE', description || '', mode_paiement || 'ESPECE', etablissement_id]);
 
-    // CORRECTION : Utilisation de 'titre' pour la trace d'audit
     await enregistrerAudit(req, 'CREATION_DEPENSE', `Dépense effectuée : ${titre} (${montant} F CFA)`);
     
     return res.status(201).json({ message: "Dépense enregistrée avec succès !" });
@@ -185,8 +209,7 @@ exports.getDepenses = async (req, res) => {
   }
 };
 
-// 6. Statistiques Financières (KPIs du tableau de bord)
-// 6. Moteur de statistiques globales/locales (Restauré avec les bonnes clés KPI)
+// 6. Moteur de statistiques globales/locales (KPIs)
 exports.getStatsFinancieres = async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: "Action non autorisée. Profil utilisateur manquant." });
@@ -194,7 +217,6 @@ exports.getStatsFinancieres = async (req, res) => {
 
   try {
     const isSuperAdmin = req.user.roles && req.user.roles.includes('SUPERADMIN');
-    // Le Superadmin peut cibler une école via query, l'admin local est confiné à son établissement
     const targetEtablissementId = isSuperAdmin ? req.query.etablissement_id : req.user.etablissement_id;
 
     let conditionInscription = "";
@@ -207,7 +229,6 @@ exports.getStatsFinancieres = async (req, res) => {
       params.push(targetEtablissementId);
     }
 
-    // 1. Calcul de l'attendu théorique (Somme des frais de scolarité des classes des élèves inscrits)
     const [attenduRows] = await db.execute(`
       SELECT SUM(c.frais_scolarite) AS total_attendu 
       FROM inscriptions i
@@ -215,23 +236,17 @@ exports.getStatsFinancieres = async (req, res) => {
       ${conditionInscription}
     `, params);
 
-    // 2. Calcul du total réellement encaissé via les versements
     const [encaisseRows] = await db.execute(`SELECT SUM(montant) AS total_encaisse FROM paiements ${conditionDirecte}`, params);
-
-    // 3. Calcul du total des charges / sorties de caisse
     const [depenseRows] = await db.execute(`SELECT SUM(montant) AS total_depenses FROM depenses ${conditionDirecte}`, params);
 
-    // Formater les valeurs numériques pour éviter les mauvaises surprises avec le type BIGNUM SQL
     const totalAttendu = parseFloat(attenduRows[0].total_attendu) || 0;
     const totalEncaisse = parseFloat(encaisseRows[0].total_encaisse) || 0;
     const totalDepenses = parseFloat(depenseRows[0].total_depenses) || 0;
 
-    // Calculs métiers
     const totalRestant = totalAttendu - totalEncaisse;
     const soldeCaisse = totalEncaisse - totalDepenses;
     const tauxRecouvrement = totalAttendu > 0 ? ((totalEncaisse / totalAttendu) * 100).toFixed(1) : 0;
 
-    // Restitution du payload exact attendu par le Dashboard React
     return res.status(200).json({
       total_attendu: totalAttendu,
       total_encaisse: totalEncaisse,

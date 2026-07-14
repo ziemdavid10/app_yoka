@@ -7,26 +7,27 @@ exports.inscrireEleve = async (req, res) => {
   }
 
   const { eleve_id, classe_id } = req.body;
-  const etablissement_id = req.user.etablissement_id;
+  const etablissement_id = req.user.etablissement_id; // Récupéré directement du token de l'utilisateur connecté
 
   if (!eleve_id || !classe_id) {
     return res.status(400).json({ error: "Veuillez sélectionner un élève et une classe." });
   }
 
   try {
-    // Récupérer l'année scolaire en cours d'exécution
+    // 1. Récupérer l'année scolaire en cours d'exécution
     const [annees] = await db.execute('SELECT id FROM annees_scolaires WHERE statut = TRUE LIMIT 1');
     if (annees.length === 0) {
       return res.status(400).json({ error: "Aucune année scolaire active configurée." });
     }
     const annee_id = annees[0].id;
 
+    // 2. Insertion en base de données avec l'etablissement_id correct
     await db.execute(
       'INSERT INTO inscriptions (eleve_id, classe_id, annee_id, etablissement_id) VALUES (?, ?, ?, ?)',
       [eleve_id, classe_id, annee_id, etablissement_id]
     );
 
-    // TRACE AUDIT
+    // 3. TRACE AUDIT
     await enregistrerAudit(req, 'INSCRIPTION_ELEVE', `Élève ID ${eleve_id} affecté à la classe ID ${classe_id} pour l'année ID ${annee_id}`);
 
     return res.status(201).json({ message: "Élève inscrit avec succès dans cette classe !" });

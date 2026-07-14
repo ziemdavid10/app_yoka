@@ -30,7 +30,7 @@ const NAV_ITEMS = [
   { key: 'vue_d_ensemble', label: "Vue d'ensemble", icon: 'dashboard' },
   { key: 'etablissements', label: 'Établissements', icon: 'apartment' },
   { key: 'admins', label: 'Gestion des admins', icon: 'manage_accounts' },
-  { key: 'audit', label: "Pistes d'audit", icon: 'shield_heart' },
+  { key: 'audit', label: "Pistes d'audit", icon: 'shield' },
   { key: 'parametres', label: 'Configuration', icon: 'settings' }
 ];
 

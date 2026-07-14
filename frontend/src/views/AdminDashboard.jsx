@@ -209,27 +209,22 @@ const AdminDashboard = () => {
   };
 
   const handleDepenseSubmit = async (e) => {
-  e.preventDefault();
-  try {
-    // Envoie directement 'depenseForm' qui contient { titre, montant, categorie, description, mode_paiement }
-    await saveDepense(depenseForm);
-    
-    afficherMessage('Dépense enregistrée au journal des charges !');
-    
-    // Réinitialisation de l'état avec des valeurs vides/par défaut cohérentes
-    setDepenseForm({ 
-      titre: '', 
-      categorie: 'Fournitures', 
-      montant: '', 
-      description: '', 
-      mode_paiement: 'CASH' 
-    });
-    
-    chargerDonnees();
-  } catch (err) { 
-    afficherMessage(err.message, true); 
-  }
-};
+    e.preventDefault();
+    try {
+      await saveDepense(depenseForm);
+      afficherMessage('Dépense enregistrée au journal des charges !');
+      setDepenseForm({ 
+        titre: '', 
+        categorie: 'Fournitures', 
+        montant: '', 
+        description: '', 
+        mode_paiement: 'CASH' 
+      });
+      chargerDonnees();
+    } catch (err) { 
+      afficherMessage(err.message, true); 
+    }
+  };
 
   const handleLogout = () => {
     localStorage.clear();
@@ -452,7 +447,7 @@ const AdminDashboard = () => {
                     <form onSubmit={handleEleveSubmit} className="yk-form">
                       <label className="yk-field">
                         <span className="yk-label">Matricule</span>
-                        <input type="text" placeholder="Ex : YK-2026-001" value={eleveForm.matricule} onChange={e => setEleveForm({ ...eleveForm, matricule: e.target.value })} required className="yk-input" />
+                        <input type="text" placeholder="Généré automatiquement" value={eleveForm.matricule} disabled className="yk-input" />
                       </label>
                       <label className="yk-field">
                         <span className="yk-label">Nom</span>
@@ -634,7 +629,7 @@ const AdminDashboard = () => {
                           </label>
                           <label className="yk-field">
                             <span className="yk-label">Référence transaction (optionnel)</span>
-                            <input type="text" placeholder="Ex : TXN-00123" value={paiementForm.reference_banque} onChange={e => setPaiementForm({ ...paiementForm, reference_banque: e.target.value })} className="yk-input" />
+                            <input type="text" placeholder="Générée automatiquement" value={paiementForm.reference_banque} disabled className="yk-input" />
                           </label>
                           <button type="submit" className="yk-btn yk-btn-blue yk-btn-block"><Icon name="payments" /> Encaisser le versement</button>
                         </form>
@@ -868,7 +863,7 @@ const CSS = `
   .yk-logout {
     display: flex; align-items: center; justify-content: center; gap: 8px;
     padding: 11px; background: rgba(220, 38, 38, 0.12); color: #fca5a5;
-    border: 1px solid rgba(220, 38, 38, 0.25); border-radius: 9px;
+    border: 1px solid rgba(220, 38, 38, 0.25); border-radius: 99px;
     cursor: pointer; font-weight: 600; font-size: 13px; font-family: inherit;
     transition: background 0.15s ease;
   }
@@ -966,6 +961,7 @@ const CSS = `
     background: #fbfcfe; transition: border-color 0.15s ease, box-shadow 0.15s ease;
   }
   .yk-input:focus { outline: none; border-color: #94a3b8; box-shadow: 0 0 0 3px rgba(67, 56, 202, 0.10); background: #fff; }
+  .yk-input:disabled { background: #f1f5f9; color: #94a3b8; cursor: not-allowed; border-color: #e2e8f0; }
 
   .yk-btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 7px;

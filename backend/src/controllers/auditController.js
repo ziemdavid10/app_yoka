@@ -1,17 +1,6 @@
 const db = require('../config/db');
 
 exports.getJournalGlobal = async (req, res) => {
-  // Sécurité anti-crash
-  if (!req.user) {
-    return res.status(401).json({ error: "Action non autorisée. Session manquante." });
-  }
-
-  // Sécurité : Vérifier si le rôle extrait du token contient bien SUPERADMIN
-  const isSuperAdmin = req.user.roles && req.user.roles.includes('SUPERADMIN');
-  if (!isSuperAdmin) {
-    return res.status(403).json({ error: "Accès refusé. Réservé au Super-Administrateur global." });
-  }
-
   const { etablissement_id } = req.query; // Optionnel : pour filtrer sur un campus précis
   
   try {

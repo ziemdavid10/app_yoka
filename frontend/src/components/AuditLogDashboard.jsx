@@ -26,14 +26,15 @@ export const AuditLogDashboard = () => {
       const resLogs = await fetch(urlLogs, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
+      if (!resLogs.ok) throw new Error(`Erreur API logs: ${resLogs.status}`);
       const dataLogs = await resLogs.json();
       setLogs(Array.isArray(dataLogs) ? dataLogs : []);
 
-      // 2. Récupération des établissements pour le sélecteur (exécuté une seule fois)
       if (etablissements.length === 0) {
         const resEtab = await fetch('/api/etablissements', {
           headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
         });
+        if (!resEtab.ok) throw new Error(`Erreur API établissements: ${resEtab.status}`);
         const dataEtab = await resEtab.json();
         setEtablissements(Array.isArray(dataEtab) ? dataEtab : []);
       }
