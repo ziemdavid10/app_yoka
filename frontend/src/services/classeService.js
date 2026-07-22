@@ -42,3 +42,20 @@ export const deleteClasse = async (id) => {
   if (!response.ok) throw new Error(data.error || 'Erreur lors de la suppression.');
   return data;
 };
+
+export const fetchTranches = async (classeId) => {
+  const response = await fetch(`${API_URL}/${classeId}/tranches`, { headers: getHeaders() });
+  if (!response.ok) throw new Error('Impossible de charger les tranches.');
+  return await response.json();
+};
+
+export const saveTranches = async (classeId, tranches) => {
+  const response = await fetch(`${API_URL}/${classeId}/tranches`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ tranches })
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Erreur lors de la sauvegarde des tranches.');
+  return data;
+};

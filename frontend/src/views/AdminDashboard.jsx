@@ -6,7 +6,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
 import { fetchEleves, saveEleve, updateEleve, deleteEleve, importElevesExcel } from '../services/eleveService';
-import { fetchClasses, saveClasse, updateClasse, deleteClasse } from '../services/classeService';
+import { fetchClasses, saveClasse, updateClasse, deleteClasse, fetchTranches, saveTranches } from '../services/classeService';
 import { fetchInscriptions, saveInscription, updateInscription, deleteInscription } from '../services/inscriptionService';
 import {
   fetchPaiements,
@@ -15,6 +15,9 @@ import {
   deletePaiement,
   fetchStatsFinancieres,
   fetchDebiteurs,
+  fetchAnnees,
+  fetchEtatParClasse,
+  fetchEtatParEleve,
   fetchDepenses,
   saveDepense,
   updateDepense,
@@ -252,11 +255,17 @@ const AdminDashboard = () => {
     taux_recouvrement: 0
   });
 
+  // États financiers par année scolaire
+  const [annees, setAnnees] = useState([]);
+  const [anneeSel, setAnneeSel] = useState('');
+  const [etatClasses, setEtatClasses] = useState([]);
+  const [etatEleves, setEtatEleves] = useState([]);
+
   // Formulaires (réutilisés pour la création ET l'édition)
   const ELEVE_VIDE = { matricule: '', nom: '', prenom: '', date_naissance: '', genre: 'M' };
-  const CLASSE_VIDE = { nom: '', frais_scolarite: '' };
+  const CLASSE_VIDE = { nom: '', frais_scolarite: '', est_classe_examen: false, frais_examen: '', frais_ape: '' };
   const INSCRIPTION_VIDE = { eleve_id: '', classe_id: '' };
-  const PAIEMENT_VIDE = { inscription_id: '', montant: '', type_versement: 'Tranche 1', mode_paiement: 'CASH', reference_banque: '' };
+  const PAIEMENT_VIDE = { inscription_id: '', categorie: 'SCOLARITE', montant: '', type_versement: '', mode_paiement: 'CASH', reference_banque: '' };
   const DEPENSE_VIDE = { titre: '', categorie: 'Fournitures', montant: '', description: '', mode_paiement: 'CASH' };
 
   const [eleveForm, setEleveForm] = useState(ELEVE_VIDE);
@@ -264,6 +273,16 @@ const AdminDashboard = () => {
   const [inscriptionForm, setInscriptionForm] = useState(INSCRIPTION_VIDE);
   const [paiementForm, setPaiementForm] = useState(PAIEMENT_VIDE);
   const [depenseForm, setDepenseForm] = useState(DEPENSE_VIDE);
+
+  // Tranches par classe
+  const [tranchesConfig, setTranchesConfig] = useState({}); // { classeId: [{ label, montant, ordre }] }
+  const [trancheEditId, setTrancheEditId] = useState(null); // classeId en cours d'édition
+  const [tranchesDraft, setTranchesDraft] = useState([]); // brouillon en cours d'édition
+
+  // Tranches disponibles pour le formulaire de paiement (selon l'élève sélectionné)
+  const [tranchesPaiement, setTranchesPaiement] = useState([]);
+  const [classeSelectionnee, setClasseSelectionnee] = useState(null); // classe de l'inscription sélectionnée (pour frais examen)
+  const [paiementsEleve, setPaiementsEleve] = useState([]); // paiements déjà effectués pour l'inscription sélectionnée
 
   // Import Excel
   const [importModal, setImportModal] = useState(false);
@@ -301,7 +320,10 @@ const AdminDashboard = () => {
         dataPaie,
         dataStats,
         dataDebi,
-        dataDepenses
+        dataDepenses,
+        dataAnnees,
+        dataEtatClasses,
+        dataEtatEleves
       ] = await Promise.all([
         fetchEleves(),
         fetchClasses(),
@@ -309,7 +331,10 @@ const AdminDashboard = () => {
         fetchPaiements(),
         fetchStatsFinancieres(),
         fetchDebiteurs(),
-        fetchDepenses()
+        fetchDepenses(),
+        fetchAnnees(),
+        fetchEtatParClasse(),
+        fetchEtatParEleve()
       ]);
 
       setEleves(dataEleves);
@@ -319,6 +344,21 @@ const AdminDashboard = () => {
       setStats(dataStats);
       setDebiteurs(dataDebi);
       setDepenses(dataDepenses);
+      setAnnees(dataAnnees);
+      setEtatClasses(dataEtatClasses);
+      setEtatEleves(dataEtatEleves);
+      const act = dataAnnees.find(a => Number(a.statut) === 1) || dataAnnees[0];
+      if (act) setAnneeSel(String(act.id));
+
+      // Charger les tranches pour toutes les classes
+      const tranchesMap = {};
+      await Promise.all(dataClasses.map(async (cl) => {
+        try {
+          const t = await fetchTranches(cl.id);
+          if (t.length > 0) tranchesMap[cl.id] = t;
+        } catch (_) {}
+      }));
+      setTranchesConfig(tranchesMap);
     } catch (err) {
       afficherMessage(err.message, true);
     } finally {
@@ -337,6 +377,55 @@ const AdminDashboard = () => {
     setSearchTerm('');
     setClasseFilter('');
   }, [activeTab]);
+
+  // Recharge stats + débiteurs + état par classe quand l'année scolaire change
+  useEffect(() => {
+    if (!anneeSel) return;
+    (async () => {
+      try {
+        const [st, deb, ec, ee] = await Promise.all([
+          fetchStatsFinancieres(anneeSel),
+          fetchDebiteurs(1, 1000, anneeSel),
+          fetchEtatParClasse(anneeSel),
+          fetchEtatParEleve(anneeSel)
+        ]);
+        setStats(st); setDebiteurs(Array.isArray(deb) ? deb : (deb.data || [])); setEtatClasses(ec); setEtatEleves(ee);
+      } catch (e) { afficherMessage(e.message, true); }
+    })();
+  }, [anneeSel]);
+
+  // Totaux ventilés (scolarité / APE / examen) calculés depuis l'état par classe
+  const totauxCategories = useMemo(() => {
+    return etatClasses.reduce((a, r) => ({
+      du_scol:  a.du_scol  + (parseFloat(r.du_scolarite)  || 0),
+      paye_scol:a.paye_scol+ (parseFloat(r.paye_scolarite)|| 0),
+      du_ape:   a.du_ape   + (parseFloat(r.du_ape)        || 0),
+      paye_ape: a.paye_ape + (parseFloat(r.paye_ape)      || 0),
+      du_exam:  a.du_exam  + (parseFloat(r.du_examen)     || 0),
+      paye_exam:a.paye_exam+ (parseFloat(r.paye_examen)   || 0),
+    }), { du_scol:0, paye_scol:0, du_ape:0, paye_ape:0, du_exam:0, paye_exam:0 });
+  }, [etatClasses]);
+
+  // Série mensuelle réelle (12 derniers mois) : recettes = paiements, dépenses = charges
+  const donneesGraphe = useMemo(() => {
+    const MOIS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc'];
+    const now = new Date();
+    const buckets = []; const idx = {};
+    for (let k = 11; k >= 0; k--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - k, 1);
+      idx[`${d.getFullYear()}-${d.getMonth()}`] = buckets.length;
+      buckets.push({ mois: MOIS[d.getMonth()], Recettes: 0, Dépenses: 0 });
+    }
+    const bump = (dateStr, champ, montant) => {
+      if (!dateStr) return;
+      const d = new Date(dateStr); if (isNaN(d.getTime())) return;
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      if (key in idx) buckets[idx[key]][champ] += parseFloat(montant) || 0;
+    };
+    (paiements || []).forEach(p => bump(p.date_paiement, 'Recettes', p.montant));
+    (depenses || []).forEach(x => bump(x.date_depense || x.created_at || x.date || x.date_creation, 'Dépenses', x.montant));
+    return buckets;
+  }, [paiements, depenses]);
 
   // 4. CORRESPONDANCE ÉLÈVE <-> CLASSE (via le matricule, présent sur les deux entités)
   const classeParMatricule = useMemo(() => {
@@ -374,6 +463,70 @@ const AdminDashboard = () => {
       closeModal();
       chargerDonnees();
     } catch (err) { afficherMessage(err.message, true); }
+  };
+
+  // Gestion des tranches
+  const ouvrirConfigTranches = (cl) => {
+    setTrancheEditId(cl.id);
+    const existantes = tranchesConfig[cl.id] || [];
+    setTranchesDraft(existantes.length > 0 ? [...existantes] : [
+      { label: 'Tranche 1', montant: '', ordre: 1 },
+      { label: 'Tranche 2', montant: '', ordre: 2 },
+      { label: 'Tranche 3', montant: '', ordre: 3 },
+    ]);
+  };
+
+  const sauvegarderTranches = async () => {
+    try {
+      await saveTranches(trancheEditId, tranchesDraft);
+      afficherMessage('Tranches enregistrées !');
+      setTrancheEditId(null);
+      chargerDonnees();
+    } catch (err) { afficherMessage(err.message, true); }
+  };
+
+  // Quand on sélectionne un élève dans le formulaire de paiement
+  const handleInscriptionSelectPaiement = (inscriptionId) => {
+    setPaiementForm(prev => ({ ...prev, inscription_id: inscriptionId, type_versement: '', montant: '' }));
+    if (!inscriptionId) { setTranchesPaiement([]); setPaiementsEleve([]); setClasseSelectionnee(null); return; }
+
+    const ins = inscriptions.find(i => String(i.id) === String(inscriptionId));
+    if (!ins) return;
+
+    // Trouver la classe de l'élève
+    const classe = classes.find(cl => String(cl.id) === String(ins.classe_id)) ||
+                   classes.find(cl => cl.nom === ins.classe_nom);
+    setClasseSelectionnee(classe || null);
+    const tranches = classe ? (tranchesConfig[classe.id] || []) : [];
+
+    // Paiements déjà effectués pour cette inscription
+    const paiesEleve = paiements.filter(p => String(p.inscription_id ?? '') === String(inscriptionId) ||
+      (p.nom === ins.nom && p.prenom === ins.prenom && p.classe_nom === ins.classe_nom));
+    setPaiementsEleve(paiesEleve);
+
+    // Le séquencement de tranches ne concerne QUE la scolarité
+    const paiesScolarite = paiesEleve.filter(p => (p.categorie || 'SCOLARITE') === 'SCOLARITE');
+    if (tranches.length > 0) {
+      const payeParLabel = {};
+      paiesScolarite.forEach(p => {
+        payeParLabel[p.type_versement] = (payeParLabel[p.type_versement] || 0) + parseFloat(p.montant || 0);
+      });
+      // Une tranche est « payée » quand son solde atteint son montant (paiements partiels cumulés)
+      const tranchesAvecStatut = tranches.map(t => ({
+        ...t,
+        paye: payeParLabel[t.label] || 0,
+        payee: (payeParLabel[t.label] || 0) >= parseFloat(t.montant)
+      }));
+      setTranchesPaiement(tranchesAvecStatut);
+      // Pré-sélectionner la première tranche non entièrement soldée + son reste
+      const prochaine = tranchesAvecStatut.find(t => !t.payee);
+      if (prochaine) {
+        const reste = parseFloat(prochaine.montant) - (prochaine.paye || 0);
+        setPaiementForm(prev => ({ ...prev, categorie: 'SCOLARITE', type_versement: prochaine.label, montant: String(reste || '') }));
+      }
+    } else {
+      setTranchesPaiement([]);
+    }
   };
 
   const handleInscriptionSubmit = async (e) => {
@@ -433,16 +586,16 @@ const AdminDashboard = () => {
     if (type === 'eleve') setEleveForm(ELEVE_VIDE);
     if (type === 'classe') setClasseForm(CLASSE_VIDE);
     if (type === 'inscription') setInscriptionForm(INSCRIPTION_VIDE);
-    if (type === 'paiement') setPaiementForm(PAIEMENT_VIDE);
+    if (type === 'paiement') { setPaiementForm(PAIEMENT_VIDE); setTranchesPaiement([]); setPaiementsEleve([]); }
     if (type === 'depense') setDepenseForm(DEPENSE_VIDE);
     setModal({ type, mode: 'create', id: null });
   };
 
   const openEditModal = (type, item) => {
     if (type === 'eleve') setEleveForm({ matricule: item.matricule, nom: item.nom, prenom: item.prenom, date_naissance: item.date_naissance || '', genre: item.genre || 'M' });
-    if (type === 'classe') setClasseForm({ nom: item.nom, frais_scolarite: item.frais_scolarite });
+    if (type === 'classe') setClasseForm({ nom: item.nom, frais_scolarite: item.frais_scolarite, est_classe_examen: !!item.est_classe_examen, frais_examen: item.frais_examen ?? '', frais_ape: item.frais_ape ?? '' });
     if (type === 'inscription') setInscriptionForm({ eleve_id: item.eleve_id ?? '', classe_id: item.classe_id ?? '' });
-    if (type === 'paiement') setPaiementForm({ inscription_id: item.inscription_id ?? '', montant: item.montant, type_versement: item.type_versement || 'Tranche 1', mode_paiement: item.mode_paiement || 'CASH', reference_banque: item.reference_banque || '' });
+    if (type === 'paiement') { setPaiementForm({ inscription_id: item.inscription_id ?? '', categorie: item.categorie || 'SCOLARITE', montant: item.montant, type_versement: item.type_versement || '', mode_paiement: item.mode_paiement || 'CASH', reference_banque: item.reference_banque || '' }); setTranchesPaiement([]); setPaiementsEleve([]); }
     if (type === 'depense') setDepenseForm({ titre: item.titre, categorie: item.categorie || 'Fournitures', montant: item.montant, description: item.description || '', mode_paiement: item.mode_paiement || 'CASH' });
     setModal({ type, mode: 'edit', id: item.id });
   };
@@ -639,6 +792,16 @@ const AdminDashboard = () => {
               {/* ---------------- TABLEAU DE BORD ---------------- */}
               {activeTab === 'dashboard' && (
                 <div className="yk-fade-in">
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
+                    <Icon name="event" style={{ fontSize: '18px', color: 'var(--yk-muted)' }} />
+                    <span style={{ fontSize: '13px', color: 'var(--yk-muted)', fontWeight: 600 }}>Année scolaire</span>
+                    <select value={anneeSel} onChange={e => setAnneeSel(e.target.value)} className="yk-input" style={{ maxWidth: '220px' }}>
+                      <option value="">Toutes les années</option>
+                      {annees.map(a => (
+                        <option key={a.id} value={a.id}>{a.libelle}{Number(a.statut) === 1 ? ' (active)' : ''}</option>
+                      ))}
+                    </select>
+                  </div>
                   <div className="yk-kpi-grid">
                     <div className="yk-kpi-card yk-kpi-blue">
                       <div className="yk-kpi-icon"><Icon name="account_balance_wallet" /></div>
@@ -678,6 +841,27 @@ const AdminDashboard = () => {
                       </div>
                     </div>
 
+                    <div className="yk-kpi-card yk-kpi-blue">
+                      <div className="yk-kpi-icon"><Icon name="menu_book" /></div>
+                      <div>
+                        <span className="yk-kpi-label">Scolarité (payé / attendu)</span>
+                        <span className="yk-kpi-value">{formatMontant(totauxCategories.paye_scol)} / {formatMontant(totauxCategories.du_scol)}</span>
+                      </div>
+                    </div>
+                    <div className="yk-kpi-card yk-kpi-blue">
+                      <div className="yk-kpi-icon"><Icon name="groups" /></div>
+                      <div>
+                        <span className="yk-kpi-label">APE (payé / attendu)</span>
+                        <span className="yk-kpi-value">{formatMontant(totauxCategories.paye_ape)} / {formatMontant(totauxCategories.du_ape)}</span>
+                      </div>
+                    </div>
+                    <div className="yk-kpi-card yk-kpi-blue">
+                      <div className="yk-kpi-icon"><Icon name="school" /></div>
+                      <div>
+                        <span className="yk-kpi-label">Examen (payé / attendu)</span>
+                        <span className="yk-kpi-value">{formatMontant(totauxCategories.paye_exam)} / {formatMontant(totauxCategories.du_exam)}</span>
+                      </div>
+                    </div>
                     <div className="yk-kpi-card yk-kpi-amber yk-kpi-rate">
                       <span className="yk-kpi-label">Taux de recouvrement</span>
                       <span className="yk-kpi-rate-value">{stats.taux_recouvrement}%</span>
@@ -688,7 +872,116 @@ const AdminDashboard = () => {
                   </div>
 
                   {/* INTEGRATION DU COMPOSANT GRAPHIQUE CI-DESSOUS */}
-                  <AdminLocalChart data={localDataMock} />
+                  <AdminLocalChart data={donneesGraphe} />
+
+                  <div className="yk-card" style={{ marginTop: '24px' }}>
+                    <div className="yk-card-header">
+                      <h3 className="yk-card-title">
+                        <Icon name="account_tree" /> État financier par classe
+                        {anneeSel && annees.find(a => String(a.id) === String(anneeSel)) ? ` — ${annees.find(a => String(a.id) === String(anneeSel)).libelle}` : ' — toutes années'}
+                      </h3>
+                      <button className="yk-btn yk-btn-ghost yk-btn-sm" onClick={() => exporterPDF(
+                        'État financier par classe',
+                        ['Classe', 'Élèves', 'Scolarité (payé/dû)', 'APE (payé/dû)', 'Examen (payé/dû)', 'Reste'],
+                        etatClasses.map(r => {
+                          const du = (parseFloat(r.du_scolarite)||0)+(parseFloat(r.du_ape)||0)+(parseFloat(r.du_examen)||0);
+                          const pa = (parseFloat(r.paye_scolarite)||0)+(parseFloat(r.paye_ape)||0)+(parseFloat(r.paye_examen)||0);
+                          return [r.classe_nom, r.nb_eleves,
+                            `${formatMontant(r.paye_scolarite)} / ${formatMontant(r.du_scolarite)}`,
+                            `${formatMontant(r.paye_ape)} / ${formatMontant(r.du_ape)}`,
+                            `${formatMontant(r.paye_examen)} / ${formatMontant(r.du_examen)}`,
+                            formatMontant(du - pa)];
+                        }),
+                        'etat_par_classe'
+                      )}>
+                        <Icon name="picture_as_pdf" style={{ fontSize: '16px' }} /> Export PDF
+                      </button>
+                    </div>
+                    <div className="yk-table-scroll">
+                      <table className="yk-table">
+                        <thead>
+                          <tr>
+                            <th>Classe</th><th>Élèves</th>
+                            <th>Scolarité (payé / dû)</th><th>APE (payé / dû)</th><th>Examen (payé / dû)</th><th>Reste</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {etatClasses.length === 0 ? (
+                            <tr><td colSpan={6} className="yk-empty-row"><Icon name="inbox" /> Aucune donnée pour cette année.</td></tr>
+                          ) : etatClasses.map(r => {
+                            const du = (parseFloat(r.du_scolarite)||0)+(parseFloat(r.du_ape)||0)+(parseFloat(r.du_examen)||0);
+                            const pa = (parseFloat(r.paye_scolarite)||0)+(parseFloat(r.paye_ape)||0)+(parseFloat(r.paye_examen)||0);
+                            const reste = du - pa;
+                            return (
+                              <tr key={`${r.classe_id}-${r.annee_id}`}>
+                                <td className="yk-strong">{r.classe_nom}</td>
+                                <td>{r.nb_eleves}</td>
+                                <td><span className="yk-text-green">{formatMontant(r.paye_scolarite)}</span> / {formatMontant(r.du_scolarite)}</td>
+                                <td><span className="yk-text-green">{formatMontant(r.paye_ape)}</span> / {formatMontant(r.du_ape)}</td>
+                                <td><span className="yk-text-green">{formatMontant(r.paye_examen)}</span> / {formatMontant(r.du_examen)}</td>
+                                <td style={{ fontWeight: 700, color: reste > 0 ? 'var(--yk-red)' : 'var(--yk-green)' }}>{formatMontant(reste)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="yk-card" style={{ marginTop: '24px' }}>
+                    <div className="yk-card-header">
+                      <h3 className="yk-card-title">
+                        <Icon name="groups" /> État financier par élève
+                        {anneeSel && annees.find(a => String(a.id) === String(anneeSel)) ? ` — ${annees.find(a => String(a.id) === String(anneeSel)).libelle}` : ' — toutes années'}
+                      </h3>
+                      <button className="yk-btn yk-btn-ghost yk-btn-sm" onClick={() => exporterPDF(
+                        'État financier par élève',
+                        ['Matricule', 'Élève', 'Classe', 'Scolarité (payé/dû)', 'APE (payé/dû)', 'Examen (payé/dû)', 'Reste'],
+                        etatEleves.map(r => {
+                          const du = (parseFloat(r.du_scolarite)||0)+(parseFloat(r.du_ape)||0)+(parseFloat(r.du_examen)||0);
+                          const pa = (parseFloat(r.paye_scolarite)||0)+(parseFloat(r.paye_ape)||0)+(parseFloat(r.paye_examen)||0);
+                          return [r.matricule, `${r.nom} ${r.prenom}`, r.classe_nom,
+                            `${formatMontant(r.paye_scolarite)} / ${formatMontant(r.du_scolarite)}`,
+                            `${formatMontant(r.paye_ape)} / ${formatMontant(r.du_ape)}`,
+                            `${formatMontant(r.paye_examen)} / ${formatMontant(r.du_examen)}`,
+                            formatMontant(du - pa)];
+                        }),
+                        'etat_par_eleve'
+                      )}>
+                        <Icon name="picture_as_pdf" style={{ fontSize: '16px' }} /> Export PDF
+                      </button>
+                    </div>
+                    <div className="yk-table-scroll">
+                      <table className="yk-table">
+                        <thead>
+                          <tr>
+                            <th>Matricule</th><th>Élève</th><th>Classe</th>
+                            <th>Scolarité (payé / dû)</th><th>APE (payé / dû)</th><th>Examen (payé / dû)</th><th>Reste</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {etatEleves.length === 0 ? (
+                            <tr><td colSpan={7} className="yk-empty-row"><Icon name="inbox" /> Aucune donnée pour cette année.</td></tr>
+                          ) : etatEleves.map(r => {
+                            const du = (parseFloat(r.du_scolarite)||0)+(parseFloat(r.du_ape)||0)+(parseFloat(r.du_examen)||0);
+                            const pa = (parseFloat(r.paye_scolarite)||0)+(parseFloat(r.paye_ape)||0)+(parseFloat(r.paye_examen)||0);
+                            const reste = du - pa;
+                            return (
+                              <tr key={r.inscription_id}>
+                                <td>{r.matricule}</td>
+                                <td className="yk-strong">{r.nom} {r.prenom}</td>
+                                <td>{r.classe_nom}</td>
+                                <td><span className="yk-text-green">{formatMontant(r.paye_scolarite)}</span> / {formatMontant(r.du_scolarite)}</td>
+                                <td><span className="yk-text-green">{formatMontant(r.paye_ape)}</span> / {formatMontant(r.du_ape)}</td>
+                                <td><span className="yk-text-green">{formatMontant(r.paye_examen)}</span> / {formatMontant(r.du_examen)}</td>
+                                <td style={{ fontWeight: 700, color: reste > 0 ? 'var(--yk-red)' : 'var(--yk-green)' }}>{formatMontant(reste)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
 
                   <div className="yk-card" style={{ marginTop: '24px' }}>
                     <div className="yk-card-header">
@@ -824,53 +1117,141 @@ const AdminDashboard = () => {
 
               {/* ---------------- CLASSES ---------------- */}
               {activeTab === 'classes' && (
-                <div className="yk-card yk-fade-in">
-                  <div className="yk-card-header">
-                    <h3 className="yk-card-title" style={{ margin: 0, border: 'none', padding: 0 }}>
-                      <Icon name="domain" /> Niveaux actifs ({filteredClasses.length})
-                    </h3>
+                <div className="yk-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                  <div className="yk-card">
+                    <div className="yk-card-header">
+                      <h3 className="yk-card-title" style={{ margin: 0, border: 'none', padding: 0 }}>
+                        <Icon name="domain" /> Niveaux actifs ({filteredClasses.length})
+                      </h3>
+                    </div>
+
+                    <ListToolbar
+                      searchValue={searchTerm}
+                      onSearchChange={setSearchTerm}
+                      searchPlaceholder="Rechercher une classe…"
+                      onExportPdf={() => exporterPDF(
+                        'Liste des classes et tarifs',
+                        ['Intitulé de classe', 'Frais de scolarité', 'Classe examen'],
+                        filteredClasses.map(cl => [cl.nom, formatMontant(cl.frais_scolarite), cl.est_classe_examen ? 'Oui' : 'Non']),
+                        'liste_classes'
+                      )}
+                      onCreate={() => openCreateModal('classe')}
+                      createLabel="Nouvelle classe"
+                    />
+
+                    <div className="yk-table-scroll">
+                      <table className="yk-table">
+                        <thead><tr><th>Intitulé de classe</th><th>Montant scolarité</th><th>Classe examen</th><th>Tranches</th><th>Actions</th></tr></thead>
+                        <tbody>
+                          {pageClasses.length === 0 ? (
+                            <tr><td colSpan={5} className="yk-empty-row">Aucune classe configurée pour le moment.</td></tr>
+                          ) : pageClasses.map(cl => (
+                            <tr key={cl.id}>
+                              <td className="yk-strong">{cl.nom}</td>
+                              <td>{formatMontant(cl.frais_scolarite)}</td>
+                              <td>
+                                {cl.est_classe_examen
+                                  ? <span className="yk-badge" style={{ background: '#fef3c7', color: '#92400e' }}><Icon name="school" style={{ fontSize: '13px' }} /> Examen</span>
+                                  : <span className="yk-muted" style={{ fontSize: '12px' }}>Non</span>}
+                              </td>
+                              <td>
+                                <button className="yk-btn yk-btn-ghost yk-btn-sm" onClick={() => ouvrirConfigTranches(cl)}>
+                                  <Icon name="tune" style={{ fontSize: '15px' }} />
+                                  {tranchesConfig[cl.id]?.length > 0 ? `${tranchesConfig[cl.id].length} tranches` : 'Config'}
+                                </button>
+                              </td>
+                              <td>
+                                <div style={{ display: 'flex', gap: '6px' }}>
+                                  <button className="yk-btn yk-btn-ghost yk-btn-sm" onClick={() => openEditModal('classe', cl)}>
+                                    <Icon name="edit" style={{ fontSize: '16px' }} />
+                                  </button>
+                                  <button className="yk-btn yk-btn-sm" style={{ background: '#fef2f2', color: '#dc2626' }} onClick={() => requestDelete('classe', cl.id, cl.nom)}>
+                                    <Icon name="delete" style={{ fontSize: '16px' }} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <Pagination page={pages.classes} totalPages={totalPages(filteredClasses)} totalItems={filteredClasses.length} onChange={p => setPage('classes', p)} />
                   </div>
 
-                  <ListToolbar
-                    searchValue={searchTerm}
-                    onSearchChange={setSearchTerm}
-                    searchPlaceholder="Rechercher une classe…"
-                    onExportPdf={() => exporterPDF(
-                      'Liste des classes et tarifs',
-                      ['Intitulé de classe', 'Frais de scolarité'],
-                      filteredClasses.map(cl => [cl.nom, formatMontant(cl.frais_scolarite)]),
-                      'liste_classes'
-                    )}
-                    onCreate={() => openCreateModal('classe')}
-                    createLabel="Nouvelle classe"
-                  />
-
-                  <div className="yk-table-scroll">
-                    <table className="yk-table">
-                      <thead><tr><th>Intitulé de classe</th><th>Montant scolarité</th><th>Actions</th></tr></thead>
-                      <tbody>
-                        {pageClasses.length === 0 ? (
-                          <tr><td colSpan={3} className="yk-empty-row">Aucune classe configurée pour le moment.</td></tr>
-                        ) : pageClasses.map(cl => (
-                          <tr key={cl.id}>
-                            <td className="yk-strong">{cl.nom}</td>
-                            <td>{formatMontant(cl.frais_scolarite)}</td>
-                            <td>
-                              <div style={{ display: 'flex', gap: '6px' }}>
-                                <button className="yk-btn yk-btn-ghost yk-btn-sm" onClick={() => openEditModal('classe', cl)}>
-                                  <Icon name="edit" style={{ fontSize: '16px' }} />
-                                </button>
-                                <button className="yk-btn yk-btn-sm" style={{ background: '#fef2f2', color: '#dc2626' }} onClick={() => requestDelete('classe', cl.id, cl.nom)}>
-                                  <Icon name="delete" style={{ fontSize: '16px' }} />
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <Pagination page={pages.classes} totalPages={totalPages(filteredClasses)} totalItems={filteredClasses.length} onChange={p => setPage('classes', p)} />
+                  {/* Panel de configuration des tranches */}
+                  {trancheEditId && (() => {
+                    const cl = classes.find(c => c.id === trancheEditId);
+                    const totalTranches = tranchesDraft.reduce((s, t) => s + (parseFloat(t.montant) || 0), 0);
+                    const totalAttendu = parseFloat(cl?.frais_scolarite) || 0;
+                    const sommeOK = tranchesDraft.length > 0 && Math.abs(totalTranches - totalAttendu) <= 0.01;
+                    const ecart = totalTranches - totalAttendu;
+                    return (
+                      <div className="yk-card yk-fade-in" style={{ border: '2px solid #0369a1' }}>
+                        <div className="yk-card-header">
+                          <h3 className="yk-card-title" style={{ margin: 0, border: 'none', padding: 0, color: '#0369a1' }}>
+                            <Icon name="tune" /> Configuration des tranches — {cl?.nom}
+                          </h3>
+                          <button className="yk-btn yk-btn-ghost yk-btn-sm" onClick={() => setTrancheEditId(null)}>
+                            <Icon name="close" style={{ fontSize: '16px' }} /> Fermer
+                          </button>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                          {tranchesDraft.map((t, i) => (
+                            <div key={i} style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                              <input
+                                type="text"
+                                placeholder="Label (ex: Tranche 1)"
+                                value={t.label}
+                                onChange={e => setTranchesDraft(prev => prev.map((x, j) => j === i ? { ...x, label: e.target.value } : x))}
+                                className="yk-input"
+                                style={{ flex: 2 }}
+                              />
+                              <input type="number" onWheel={e => e.target.blur()}
+                                placeholder="Montant (F CFA)"
+                                value={t.montant}
+                                onChange={e => setTranchesDraft(prev => prev.map((x, j) => j === i ? { ...x, montant: e.target.value } : x))}
+                                className="yk-input"
+                                style={{ flex: 1 }}
+                              />
+                              <button
+                                className="yk-btn yk-btn-sm"
+                                style={{ background: '#fef2f2', color: '#dc2626', flexShrink: 0 }}
+                                onClick={() => setTranchesDraft(prev => prev.filter((_, j) => j !== i))}
+                              >
+                                <Icon name="remove" style={{ fontSize: '16px' }} />
+                              </button>
+                            </div>
+                          ))}
+                          <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
+                            <button
+                              className="yk-btn yk-btn-ghost yk-btn-sm"
+                              onClick={() => setTranchesDraft(prev => [...prev, { label: `Tranche ${prev.length + 1}`, montant: '', ordre: prev.length + 1 }])}
+                            >
+                              <Icon name="add" style={{ fontSize: '16px' }} /> Ajouter une tranche
+                            </button>
+                            <button
+                              className="yk-btn yk-btn-blue yk-btn-sm"
+                              onClick={sauvegarderTranches}
+                              disabled={!sommeOK}
+                              title={sommeOK ? '' : 'La somme des tranches doit égaler les frais de scolarité'}
+                              style={!sommeOK ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+                            >
+                              <Icon name="save" style={{ fontSize: '16px' }} /> Enregistrer les tranches
+                            </button>
+                          </div>
+                          {tranchesDraft.length > 0 && (
+                            <div style={{ fontSize: '12.5px', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '6px', color: sommeOK ? '#16a34a' : '#dc2626' }}>
+                              <Icon name={sommeOK ? 'check_circle' : 'error'} style={{ fontSize: '16px' }} />
+                              <span>
+                                Total configuré : <strong>{formatMontant(totalTranches)}</strong> / {formatMontant(totalAttendu)} attendus
+                                {!sommeOK && <> — {ecart > 0 ? `exc\u00e8s de ${formatMontant(ecart)}` : `manque ${formatMontant(-ecart)}`}</>}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
 
@@ -1120,7 +1501,43 @@ const AdminDashboard = () => {
             </label>
             <label className="yk-field">
               <span className="yk-label">Frais de scolarité (F CFA)</span>
-              <input type="number" placeholder="Ex : 150000" value={classeForm.frais_scolarite} onChange={e => setClasseForm({ ...classeForm, frais_scolarite: e.target.value })} required className="yk-input" />
+              <input type="number" onWheel={e => e.target.blur()} placeholder="Ex : 150000" value={classeForm.frais_scolarite} onChange={e => setClasseForm({ ...classeForm, frais_scolarite: e.target.value })} required className="yk-input" />
+            </label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: classeForm.est_classe_examen ? '#fef3c7' : '#f8fafc', borderRadius: '8px', border: `1px solid ${classeForm.est_classe_examen ? '#fcd34d' : '#d6dbe3'}` }}>
+              <div>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--yk-ink)' }}>
+                  <Icon name="school" style={{ fontSize: '16px', verticalAlign: 'middle', marginRight: '6px', color: classeForm.est_classe_examen ? '#92400e' : 'var(--yk-muted)' }} />
+                  Classe d'examen
+                </div>
+                <div style={{ fontSize: '11.5px', color: 'var(--yk-muted)', marginTop: '2px' }}>Frais d'examen supplémentaires applicables</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setClasseForm(prev => ({ ...prev, est_classe_examen: !prev.est_classe_examen }))}
+                style={{
+                  width: '44px', height: '24px', borderRadius: '12px', border: 'none', cursor: 'pointer',
+                  background: classeForm.est_classe_examen ? '#f59e0b' : '#cbd5e1',
+                  position: 'relative', transition: 'background 0.2s ease', flexShrink: 0
+                }}
+                aria-label="Basculer classe d'examen"
+              >
+                <span style={{
+                  position: 'absolute', top: '3px',
+                  left: classeForm.est_classe_examen ? '23px' : '3px',
+                  width: '18px', height: '18px', borderRadius: '50%', background: '#fff',
+                  transition: 'left 0.2s ease', boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
+                }} />
+              </button>
+            </div>
+            {classeForm.est_classe_examen && (
+              <label className="yk-field">
+                <span className="yk-label">Frais d'examen (F CFA)</span>
+                <input type="number" onWheel={e => e.target.blur()} placeholder="Ex : 20000" value={classeForm.frais_examen} onChange={e => setClasseForm({ ...classeForm, frais_examen: e.target.value })} required className="yk-input" />
+              </label>
+            )}
+            <label className="yk-field">
+              <span className="yk-label">Cotisation APE (F CFA) — optionnel</span>
+              <input type="number" onWheel={e => e.target.blur()} placeholder="Ex : 10000" value={classeForm.frais_ape} onChange={e => setClasseForm({ ...classeForm, frais_ape: e.target.value })} className="yk-input" />
             </label>
             <button type="submit" className="yk-btn yk-btn-blue yk-btn-block"><Icon name="save" /> {modal.mode === 'edit' ? 'Enregistrer les modifications' : 'Créer la classe'}</button>
           </form>
@@ -1154,26 +1571,160 @@ const AdminDashboard = () => {
           <form onSubmit={handlePaiementSubmit} className="yk-form">
             <label className="yk-field">
               <span className="yk-label">Élève inscrit</span>
-              <select value={paiementForm.inscription_id} onChange={e => setPaiementForm({ ...paiementForm, inscription_id: e.target.value })} required className="yk-input">
+              
+              {/* <select
+                value={paiementForm.inscription_id}
+                onChange={e => handleInscriptionSelectPaiement(e.target.value)}
+                required
+                className="yk-input"
+                disabled={modal.mode === 'edit'}
+              >
                 <option value="">-- Choisir un élève inscrit --</option>
                 {inscriptions.map(ins => (
                   <option key={ins.id} value={ins.id}>{ins.matricule} - {ins.nom} {ins.prenom} ({ins.classe_nom})</option>
                 ))}
+              </select> */}
+
+
+              {/* <div className="yk-form-group">
+                <label className="yk-label">Élève Inscrit *</label>
+                <select
+                  className="yk-select"
+                  value={paiementForm.inscription_id}
+                  onChange={(e) => setPaiementForm({ ...paiementForm, inscription_id: e.target.value })}
+                  required
+                  disabled={modal.mode === 'edit'}
+                >
+                  <option value="">-- Sélectionner un élève inscrit --</option>
+                  {inscriptions.map(ins => (
+                    <option key={ins.id} value={ins.id}>
+                      {ins.nom} {ins.prenom} ({ins.classe_nom} - {ins.matricule})
+                    </option>
+                  ))}
+                </select>
+              </div> */}
+
+              <label className="yk-field">
+                <span className="yk-label">Élève Inscrit *</span>
+                <select
+                  className="yk-input"
+                  value={paiementForm.inscription_id}
+                  onChange={(e) => handleInscriptionSelectPaiement(e.target.value)}
+                  required
+                  disabled={modal.mode === 'edit'}
+                >
+                  <option value="">-- Choisir un élève inscrit --</option>
+                  {inscriptions.map(ins => (
+                    <option key={ins.id} value={ins.id}>
+                      {ins.matricule} - {ins.nom} {ins.prenom} ({ins.classe_nom})
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {/* <div className="yk-form-group">
+                <label className="yk-label">Élève Inscrit *</label>
+                <select
+                  className="yk-select"
+                  value={paiementForm.inscription_id}
+                  onChange={(e) => handleInscriptionSelectPaiement(e.target.value)}
+                  required
+                  disabled={modal.mode === 'edit'}
+                >
+                  <option value="">-- Sélectionner un élève inscrit --</option>
+                  {inscriptions.map(ins => (
+                    <option key={ins.id} value={ins.id}>
+                      {ins.matricule} - {ins.nom} {ins.prenom} ({ins.classe_nom})
+                    </option>
+                  ))}
+                </select>
+              </div> */}
+
+
+
+
+              
+            </label>
+
+            <label className="yk-field">
+              <span className="yk-label">Nature du versement</span>
+              <select
+                value={paiementForm.categorie}
+                onChange={e => setPaiementForm(prev => ({ ...prev, categorie: e.target.value, type_versement: '', montant: '' }))}
+                required
+                className="yk-input"
+              >
+                <option value="SCOLARITE">Frais de scolarité</option>
+                <option value="APE">Cotisation APE</option>
+                {classeSelectionnee?.est_classe_examen && <option value="EXAMEN">Frais d'examen</option>}
               </select>
             </label>
+
+            {/* Échéancier — scolarité échelonnée uniquement */}
+            {paiementForm.categorie === 'SCOLARITE' && tranchesPaiement.length > 0 && (
+              <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px', padding: '12px' }}>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: '#0369a1', marginBottom: '8px' }}>
+                  <Icon name="receipt_long" style={{ fontSize: '14px', verticalAlign: 'middle' }} /> Échéancier de paiement
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {tranchesPaiement.map((t, i) => {
+                    const prochaine = tranchesPaiement.find(x => !x.payee);
+                    const estProchaine = prochaine && t.label === prochaine.label;
+                    const estBloquee = !t.payee && !estProchaine;
+                    return (
+                      <div key={i} style={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        padding: '6px 10px', borderRadius: '6px',
+                        background: t.payee ? '#ecfdf5' : estProchaine ? '#eff6ff' : '#f8fafc',
+                        border: `1px solid ${t.payee ? '#a7f3d0' : estProchaine ? '#bfdbfe' : '#e2e8f0'}`
+                      }}>
+                        <span style={{ fontSize: '12.5px', fontWeight: 600, color: t.payee ? '#047857' : estProchaine ? '#1d4ed8' : '#94a3b8' }}>
+                          {t.payee ? <Icon name="check_circle" style={{ fontSize: '14px', verticalAlign: 'middle' }} /> :
+                           estProchaine ? <Icon name="radio_button_checked" style={{ fontSize: '14px', verticalAlign: 'middle' }} /> :
+                           <Icon name="lock" style={{ fontSize: '14px', verticalAlign: 'middle' }} />}
+                          {' '}{t.label}
+                        </span>
+                        <span style={{ fontSize: '12px', color: t.payee ? '#047857' : estProchaine ? '#1d4ed8' : '#94a3b8', fontWeight: 700 }}>
+                          {t.payee ? '✓ Payée' : estProchaine ? formatMontant(t.montant) : '🔒 Bloquée'}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {paiementForm.categorie === 'SCOLARITE' && tranchesPaiement.length > 0 && (
+              <label className="yk-field">
+                <span className="yk-label">Tranche à régler</span>
+                <select
+                  value={paiementForm.type_versement}
+                  onChange={e => {
+                    const t = tranchesPaiement.find(x => x.label === e.target.value);
+                    const reste = t ? (parseFloat(t.montant) - (t.paye || 0)) : 0;
+                    setPaiementForm(prev => ({ ...prev, type_versement: e.target.value, montant: t ? String(reste) : prev.montant }));
+                  }}
+                  required
+                  className="yk-input"
+                >
+                  <option value="">-- Sélectionner la tranche --</option>
+                  {tranchesPaiement.filter(t => !t.payee).map((t, i) => {
+                    const prochaine = tranchesPaiement.find(x => !x.payee);
+                    const estBloquee = prochaine && t.label !== prochaine.label;
+                    const reste = parseFloat(t.montant) - (t.paye || 0);
+                    return (
+                      <option key={i} value={t.label} disabled={estBloquee}>
+                        {t.label} — reste {formatMontant(reste)}{estBloquee ? ' 🔒' : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+              </label>
+            )}
+
             <label className="yk-field">
               <span className="yk-label">Montant (F CFA)</span>
-              <input type="number" placeholder="Ex : 25000" value={paiementForm.montant} onChange={e => setPaiementForm({ ...paiementForm, montant: e.target.value })} required className="yk-input" />
-            </label>
-            <label className="yk-field">
-              <span className="yk-label">Tranche / Type de versement</span>
-              <select value={paiementForm.type_versement} onChange={e => setPaiementForm({ ...paiementForm, type_versement: e.target.value })} required className="yk-input">
-                <option value="Tranche 1">Tranche 1</option>
-                <option value="Tranche 2">Tranche 2</option>
-                <option value="Tranche 3">Tranche 3</option>
-                <option value="Frais Inscription">Frais d'Inscription</option>
-                <option value="Totalité Scolarité">Totalité Scolarité</option>
-              </select>
+              <input type="number" onWheel={e => e.target.blur()} placeholder="Ex : 25000" value={paiementForm.montant} onChange={e => setPaiementForm({ ...paiementForm, montant: e.target.value })} required className="yk-input" />
             </label>
             <label className="yk-field">
               <span className="yk-label">Mode de paiement</span>
@@ -1213,7 +1764,7 @@ const AdminDashboard = () => {
             </label>
             <label className="yk-field">
               <span className="yk-label">Montant décaissé (F CFA)</span>
-              <input type="number" placeholder="Ex: 45000" value={depenseForm.montant} onChange={e => setDepenseForm({ ...depenseForm, montant: e.target.value })} required className="yk-input" />
+              <input type="number" onWheel={e => e.target.blur()} placeholder="Ex: 45000" value={depenseForm.montant} onChange={e => setDepenseForm({ ...depenseForm, montant: e.target.value })} required className="yk-input" />
             </label>
             <label className="yk-field">
               <span className="yk-label">Mode de décaissement</span>

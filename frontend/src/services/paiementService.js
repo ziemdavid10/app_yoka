@@ -22,14 +22,16 @@ export const savePaiement = async (paiementData) => {
   return data;
 };
 
-export const fetchStatsFinancieres = async () => {
-  const response = await fetch(`${API_URL}/stats`, { headers: getHeaders() });
+export const fetchStatsFinancieres = async (anneeId = null) => {
+  const q = anneeId ? `?annee_id=${anneeId}` : '';
+  const response = await fetch(`${API_URL}/stats${q}`, { headers: getHeaders() });
   if (!response.ok) throw new Error('Impossible de charger les statistiques.');
   return await response.json();
 };
 
-export const fetchDebiteurs = async (page = 1, limit = 10) => {
-  const response = await fetch(`${API_URL}/debiteurs?page=${page}&limit=${limit}`, { headers: getHeaders() });
+export const fetchDebiteurs = async (page = 1, limit = 10, anneeId = null) => {
+  const q = anneeId ? `&annee_id=${anneeId}` : '';
+  const response = await fetch(`${API_URL}/debiteurs?page=${page}&limit=${limit}${q}`, { headers: getHeaders() });
   if (!response.ok) throw new Error('Impossible de charger la liste des débiteurs.');
   return await response.json(); // { data, pagination }
 };
@@ -95,4 +97,28 @@ export const deleteDepense = async (id) => {
   const json = await response.json();
   if (!response.ok) throw new Error(json.error || 'Erreur lors de la suppression de la dépense.');
   return json;
+};
+
+
+// Liste des années scolaires (sélecteur des états financiers)
+export const fetchAnnees = async () => {
+  const response = await fetch(`${API_URL}/annees`, { headers: getHeaders() });
+  if (!response.ok) throw new Error('Impossible de charger les années scolaires.');
+  return await response.json();
+};
+
+// État financier par classe (ventilé scolarité/APE/examen), filtré par année
+export const fetchEtatParClasse = async (anneeId = null) => {
+  const q = anneeId ? `?annee_id=${anneeId}` : '';
+  const response = await fetch(`${API_URL}/etats/classes${q}`, { headers: getHeaders() });
+  if (!response.ok) throw new Error('Impossible de charger l\u0027état par classe.');
+  return await response.json();
+};
+
+// État financier par élève (ventilé scolarité/APE/examen), filtré par année
+export const fetchEtatParEleve = async (anneeId = null) => {
+  const q = anneeId ? `?annee_id=${anneeId}` : '';
+  const response = await fetch(`${API_URL}/etats/eleves${q}`, { headers: getHeaders() });
+  if (!response.ok) throw new Error('Impossible de charger l\u0027état par élève.');
+  return await response.json();
 };
