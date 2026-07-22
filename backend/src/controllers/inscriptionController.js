@@ -99,7 +99,7 @@ exports.getInscriptions = async (req, res) => {
     const isSuperAdmin = req.user.roles && req.user.roles.includes('SUPERADMIN');
     
     let query = `
-      SELECT i.id, e.matricule, e.nom, e.prenom, c.nom AS classe_nom, a.libelle AS annee_libelle, i.date_inscription, etab.nom AS etablissement_nom
+      SELECT i.id, i.eleve_id, i.classe_id, i.annee_id, e.matricule, e.nom, e.prenom, c.nom AS classe_nom, a.libelle AS annee_libelle, i.date_inscription, etab.nom AS etablissement_nom
       FROM inscriptions i
       INNER JOIN eleves e ON i.eleve_id = e.id
       INNER JOIN classes c ON i.classe_id = c.id
@@ -123,5 +123,56 @@ exports.getInscriptions = async (req, res) => {
   } catch (error) {
     console.error("Erreur lors de l'extraction des inscriptions :", error);
     return res.status(500).json({ error: "Erreur lors du chargement des inscriptions." });
+  }
+};
+
+
+// 3. Modifier une inscription (réaffectation de classe / élève)
+exports.modifierInscription = async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: "Action non autorisée." });
+  const { id } = req.params;
+  const { classe_id, eleve_id } = req.body;
+  const etablissement_id = req.user.etablissement_id;
+  if (!classe_id) return res.status(400).json({ error: "La classe est obligatoire." });
+  try {
+    const [cls] = await db.execute('SELECT id FROM classes WHERE id = ? AND etablissement_id = ?', [classe_id, etablissement_id]);
+    if (cls.length === 0) return res.status(403).json({ error: "Classe invalide ou hors de votre établissement." });
+
+    const sets = ['classe_id = ?']; const params = [classe_id];
+    if (eleve_id) {
+      const [el] = await db.execute('SELECT id FROM eleves WHERE id = ? AND etablissement_id = ?', [eleve_id, etablissement_id]);
+      if (el.length === 0) return res.status(403).json({ error: "Élève invalide ou hors de votre établissement." });
+      sets.push('eleve_id = ?'); params.push(eleve_id);
+    }
+    params.push(id, etablissement_id);
+    const [result] = await db.execute(`UPDATE inscriptions SET ${sets.join(', ')} WHERE id = ? AND etablissement_id = ?`, params);
+    if (result.affectedRows === 0) return res.status(404).json({ error: "Inscription introuvable ou accès refusé." });
+
+    await enregistrerAudit(req, 'MODIFICATION_INSCRIPTION', `Modification de l\u0027inscription ID ${id}`);
+    return res.status(200).json({ message: "Inscription mise à jour !" });
+  } catch (error) {
+    console.error("Erreur modification inscription :", error);
+    return res.status(500).json({ error: error.sqlMessage || error.message, code: error.code });
+  }
+};
+
+// 4. Supprimer (annuler) une inscription — bloquée si des versements existent
+exports.supprimerInscription = async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: "Action non autorisée." });
+  const { id } = req.params;
+  const etablissement_id = req.user.etablissement_id;
+  try {
+    const [pay] = await db.execute('SELECT COUNT(*) AS n FROM paiements WHERE inscription_id = ?', [id]);
+    if (pay[0].n > 0) {
+      return res.status(409).json({ error: "Impossible d\u0027annuler : des versements sont rattachés à cette inscription." });
+    }
+    const [result] = await db.execute('DELETE FROM inscriptions WHERE id = ? AND etablissement_id = ?', [id, etablissement_id]);
+    if (result.affectedRows === 0) return res.status(404).json({ error: "Inscription introuvable ou accès refusé." });
+
+    await enregistrerAudit(req, 'SUPPRESSION_INSCRIPTION', `Annulation de l\u0027inscription ID ${id}`);
+    return res.status(200).json({ message: "Inscription annulée !" });
+  } catch (error) {
+    console.error("Erreur suppression inscription :", error);
+    return res.status(500).json({ error: error.sqlMessage || error.message, code: error.code });
   }
 };

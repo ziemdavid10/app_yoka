@@ -3,12 +3,14 @@ const router = express.Router();
 const classeController = require('../controllers/classeController');
 const { verifierAuth } = require('../middlewares/authMiddleware');
 
-// Routes principales des classes
+// CRUD classes
 router.post('/', verifierAuth, classeController.creerClasse);
 router.get('/', verifierAuth, classeController.getClasses);
+router.put('/:id', verifierAuth, classeController.updateClasse);
+router.delete('/:id', verifierAuth, classeController.deleteClasse);
 
-// Nouvelles routes pour la gestion des tranches d'une classe spécifique
-router.post('/:classe_id/tranches', verifierAuth, classeController.saveTranches);
+// Tranches d'une classe
 router.get('/:classe_id/tranches', verifierAuth, classeController.getTranches);
+router.post('/:classe_id/tranches', verifierAuth, classeController.saveTranches);
 
 module.exports = router;
