@@ -134,3 +134,101 @@ exports.listerTousLesAdmins = async (req, res) => {
     return res.status(500).json({ error: "Erreur lors de la récupération des comptes administrateurs." });
   }
 };
+
+// 4. Modifier un Administrateur
+exports.modifierAdmin = async (req, res) => {
+  const { id } = req.params;
+  const { nom, prenom } = req.body;
+
+  if (!nom) {
+    return res.status(400).json({ error: "Le nom est obligatoire." });
+  }
+
+  try {
+    const [result] = await db.execute(
+      'UPDATE utilisateurs SET nom = ?, prenom = ? WHERE id = ?',
+      [nom, prenom || '', id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Administrateur introuvable." });
+    }
+
+    await enregistrerAudit(req, 'MODIFICATION_ADMIN', `Mise à jour du profil admin ID: ${id}`);
+    return res.status(200).json({ message: "Profil administrateur mis à jour." });
+  } catch (error) {
+    console.error("Erreur modifierAdmin :", error);
+    return res.status(500).json({ error: "Erreur lors de la modification de l'administrateur." });
+  }
+};
+
+// 5. Activer / Désactiver un Administrateur
+exports.changerStatutAdmin = async (req, res) => {
+  const { id } = req.params;
+  const { statut } = req.body; // true/1 ou false/0
+
+  if (statut === undefined) {
+    return res.status(400).json({ error: "Le statut est requis." });
+  }
+
+  try {
+    const nouvelEtat = statut ? 1 : 0;
+    const [result] = await db.execute('UPDATE utilisateurs SET statut = ? WHERE id = ?', [nouvelEtat, id]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Administrateur introuvable." });
+    }
+
+    await enregistrerAudit(req, nouvelEtat === 1 ? 'ACTIVATION_ADMIN' : 'DESACTIVATION_ADMIN', `Changement statut admin ID: ${id} -> ${nouvelEtat}`);
+    return res.status(200).json({ message: `Compte administrateur ${nouvelEtat === 1 ? 'activé' : 'désactivé'}.` });
+  } catch (error) {
+    console.error("Erreur changerStatutAdmin :", error);
+    return res.status(500).json({ error: "Erreur lors du changement de statut de l'administrateur." });
+  }
+};
+
+// 6. Réinitialiser le mot de passe d'un Administrateur
+exports.reinitialiserMotDePasseAdmin = async (req, res) => {
+  const { id } = req.params;
+  const { nouveau_mot_de_passe } = req.body;
+
+  if (!nouveau_mot_de_passe || nouveau_mot_de_passe.length < 6) {
+    return res.status(400).json({ error: "Le mot de passe doit contenir au moins 6 caractères." });
+  }
+
+  try {
+    const hashedPass = await bcrypt.hash(nouveau_mot_de_passe, 10);
+    const [result] = await db.execute('UPDATE utilisateurs SET mot_de_passe = ? WHERE id = ?', [hashedPass, id]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Administrateur introuvable." });
+    }
+
+    await enregistrerAudit(req, 'REINITIALISATION_MDP_ADMIN', `Réinitialisation du mot de passe pour l'administrateur ID: ${id}`);
+    return res.status(200).json({ message: "Mot de passe réinitialisé avec succès." });
+  } catch (error) {
+    console.error("Erreur reinitialiserMotDePasseAdmin :", error);
+    return res.status(500).json({ error: "Erreur lors de la réinitialisation du mot de passe." });
+  }
+};
+
+// 7. Supprimer un Administrateur
+exports.supprimerAdmin = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Supprimer les rôles rattachés puis l'utilisateur
+    await db.execute('DELETE FROM utilisateur_roles WHERE utilisateur_id = ?', [id]);
+    const [result] = await db.execute('DELETE FROM utilisateurs WHERE id = ?', [id]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Administrateur introuvable." });
+    }
+
+    await enregistrerAudit(req, 'SUPPRESSION_ADMIN', `Suppression du compte administrateur ID: ${id}`);
+    return res.status(200).json({ message: "Administrateur supprimé avec succès." });
+  } catch (error) {
+    console.error("Erreur supprimerAdmin :", error);
+    return res.status(500).json({ error: "Erreur lors de la suppression de l'administrateur." });
+  }
+};

@@ -15,8 +15,8 @@ import { fetchEtablissements, saveEtablissement, fetchAdminsSysteme } from '../s
 //   PATCH  /api/auth/admins/:id/statut       (Activer/Désactiver admin)
 //   PATCH  /api/auth/admins/:id/reinitialiser-mot-de-passe
 //   DELETE /api/auth/admins/:id
-//   GET    /api/annees-academiques
-//   POST   /api/annees-academiques/activer
+//   GET    /api/annees-scolaires
+//   POST   /api/annees-scolaires/activer
 //   PUT    /api/parametres
 // ---------------------------------------------------------------------------
 
@@ -211,6 +211,10 @@ export default function SuperAdminDashboard() {
   );
 
   const appelApiProtegee = async (endpoint, method = 'GET', body) => {
+
+    console.log("Endpoint :", endpoint);
+    console.log("Method :", method);
+    console.log("Body :", body);
     const response = await fetch(`http://localhost:3000${endpoint}`, {
       method,
       headers: {
@@ -245,7 +249,7 @@ export default function SuperAdminDashboard() {
   const chargerAnnees = async () => {
     setLoadingAnnee(true);
     try {
-      const data = await appelApiProtegee('/api/annees-academiques', 'GET');
+      const data = await appelApiProtegee('/api/annees-scolaires', 'GET');
       setAnneesAcademiques(Array.isArray(data) ? data : data.anneesAcademiques || []);
     } catch {
       setAnneesAcademiques([]);
@@ -318,7 +322,7 @@ export default function SuperAdminDashboard() {
   const handleEtabEditSubmit = async (e) => {
     e.preventDefault();
     try {
-      await appelApiProtegee(`/api/etablissements/${editionEtab.id}`, 'PATCH', {
+      await appelApiProtegee(`/api/etablissements/${editionEtab.id}`, 'PUT', {
         nom: editionEtab.nom,
         adresse: editionEtab.adresse,
         telephone: editionEtab.telephone
@@ -331,23 +335,67 @@ export default function SuperAdminDashboard() {
     }
   };
 
+  // const handleToggleEtabStatut = (etab) => {
+  //   const actif = etab.actif !== true;
+  //   demanderConfirmation({
+  //     titre: actif ? "Désactiver cet établissement ?" : "Réactiver cet établissement ?",
+  //     message: actif
+  //       ? `Les utilisateurs de « ${etab.nom} » n'auront plus accès à la plateforme. Cette action est journalisée.`
+  //       : `« ${etab.nom} » retrouvera son accès complet.`,
+  //     tonalite: actif ? 'danger' : 'default',
+  //     libelleConfirmation: actif ? 'Désactiver' : 'Réactiver',
+  //     icone: actif ? 'block' : 'check_circle',
+  //     onConfirm: async () => {
+  //       await appelApiProtegee(`/api/etablissements/${etab.id}/statut`, 'PATCH', { actif : !actif });
+  //       afficherMessage(`Établissement ${actif ? 'désactivé' : 'réactivé'} avec succès.`);
+  //       chargerDonneesSysteme();
+  //     }
+  //   });
+  // };
+
   const handleToggleEtabStatut = (etab) => {
-    const actif = etab.actif !== false;
-    demanderConfirmation({
-      titre: actif ? "Désactiver cet établissement ?" : "Réactiver cet établissement ?",
-      message: actif
-        ? `Les utilisateurs de « ${etab.nom} » n'auront plus accès à la plateforme. Cette action est journalisée.`
-        : `« ${etab.nom} » retrouvera son accès complet.`,
-      tonalite: actif ? 'danger' : 'default',
-      libelleConfirmation: actif ? 'Désactiver' : 'Réactiver',
-      icone: actif ? 'block' : 'check_circle',
-      onConfirm: async () => {
-        await appelApiProtegee(`/api/etablissements/${etab.id}/statut`, 'PATCH', { actif: !actif });
-        afficherMessage(`Établissement ${actif ? 'désactivé' : 'réactivé'} avec succès.`);
-        chargerDonneesSysteme();
+  // Le backend renvoie statut = 1 (actif) ou 0 (inactif)
+  const actif = etab.statut === 1;
+
+  demanderConfirmation({
+    titre: actif
+      ? "Désactiver cet établissement ?"
+      : "Réactiver cet établissement ?",
+
+    message: actif
+      ? `Les utilisateurs de « ${etab.nom} » n'auront plus accès à la plateforme. Cette action est journalisée.`
+      : `« ${etab.nom} » retrouvera son accès complet.`,
+
+    tonalite: actif ? "danger" : "default",
+
+    libelleConfirmation: actif
+      ? "Désactiver"
+      : "Réactiver",
+
+    icone: actif
+      ? "block"
+      : "check_circle",
+
+    onConfirm: async () => {
+      try {
+        // On inverse simplement l'état actuel
+        await appelApiProtegee(
+          `/api/etablissements/${etab.id}/statut`,
+          "PATCH",
+          {
+            actif: !actif
+          }
+        );
+        afficherMessage(
+          `Établissement ${actif ? "désactivé" : "réactivé"} avec succès.`
+        );
+        await chargerDonneesSysteme();
+      } catch (err) {
+        afficherMessage(err.message || "Une erreur est survenue.");
       }
-    });
-  };
+    }
+  });
+};
 
   const handleSupprimerEtab = (etab) => {
     demanderConfirmation({
@@ -479,7 +527,7 @@ export default function SuperAdminDashboard() {
       libelleConfirmation: 'Activer cette année',
       icone: 'event_available',
       onConfirm: async () => {
-        await appelApiProtegee('/api/annees-academiques/activer', 'POST', nouvelleAnnee);
+        await appelApiProtegee('/api/annees-scolaires/activer', 'POST', nouvelleAnnee);
         afficherMessage(`Année académique « ${nouvelleAnnee.libelle} » activée.`);
         setFormAnnee({ libelle: '', date_debut: '', date_fin: '' });
         chargerAnnees();
@@ -736,7 +784,7 @@ export default function SuperAdminDashboard() {
                   ) : etablissements.length === 0 ? (
                     <tr><td colSpan="6" style={{ textAlign: 'center', color: 'var(--yk-muted)', padding: '24px' }}>Aucun établissement enregistré.</td></tr>
                   ) : etablissements.map(etab => {
-                    const actif = etab.actif !== false;
+                    const actif = etab.statut === 1;
                     return (
                       <tr key={etab.id}>
                         <td style={{ fontWeight: 600 }}>{etab.nom}</td>
