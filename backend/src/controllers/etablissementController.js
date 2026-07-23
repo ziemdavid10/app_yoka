@@ -114,32 +114,6 @@ exports.changerStatutEtablissement = async (req, res) => {
     });
   }
 };
-// exports.changerStatutEtablissement = async (req, res) => {
-//   const { id } = req.params;
-//   const { statut } = req.body; // true/1 ou false/0
-
-//   if (statut === undefined) {
-//     return res.status(400).json({ error: "Le statut (actif/inactif) est requis." });
-//   }
-
-//   try {
-//     const nouvelEtat = statut ? 1 : 0;
-//     const [result] = await db.execute('UPDATE etablissements SET statut = ? WHERE id = ?', [nouvelEtat, id]);
-
-//     if (result.affectedRows === 0) {
-//       return res.status(404).json({ error: "Établissement introuvable." });
-//     }
-
-//     const action = nouvelEtat === 1 ? 'ACTIVATION_ETABLISSEMENT' : 'DESACTIVATION_ETABLISSEMENT';
-//     await enregistrerAudit(req, action, `Changement de statut de l'établissement ID: ${id} -> ${nouvelEtat === 1 ? 'Actif' : 'Inactif'}`);
-
-//     return res.status(200).json({ message: `Établissement ${nouvelEtat === 1 ? 'activé' : 'désactivé'} avec succès.` });
-//   } catch (error) {
-//     console.error("Erreur changerStatutEtablissement :", error);
-//     return res.status(500).json({ error: "Erreur lors de la modification du statut de l'établissement." });
-//   }
-// };
-
 // 5. Supprimer un établissement
 exports.supprimerEtablissement = async (req, res) => {
   const { id } = req.params;

@@ -13,8 +13,12 @@ exports.listerAnneesScolaires = async (req, res) => {
 };
 
 // 2. Créer une nouvelle année scolaire
+// ⚠️ Nécessite la migration : ALTER TABLE annees_scolaires
+//     ADD COLUMN date_debut DATE NULL, ADD COLUMN date_fin DATE NULL;
+// (le frontend collecte déjà ces deux champs en obligatoire, ils étaient
+//  jusqu'ici silencieusement ignorés côté serveur)
 exports.creerAnneeScolaire = async (req, res) => {
-  const { libelle } = req.body; // Ex: "2025-2026"
+  const { libelle, date_debut, date_fin } = req.body; // Ex: "2025-2026"
 
   if (!libelle) {
     return res.status(400).json({ error: "Le libellé de l'année scolaire est requis." });
@@ -22,8 +26,8 @@ exports.creerAnneeScolaire = async (req, res) => {
 
   try {
     const [result] = await db.execute(
-      'INSERT INTO annees_scolaires (libelle, statut) VALUES (?, 0)',
-      [libelle]
+      'INSERT INTO annees_scolaires (libelle, statut, date_debut, date_fin) VALUES (?, 0, ?, ?)',
+      [libelle, date_debut || null, date_fin || null]
     );
 
     await enregistrerAudit(req, 'CREATION_ANNEE_SCOLAIRE', `Création de l'année scolaire : ${libelle}`);

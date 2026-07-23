@@ -62,7 +62,15 @@ exports.login = async (req, res) => {
   }
 
   try {
-    const [users] = await db.execute('SELECT * FROM utilisateurs WHERE identifiant = ?', [identifiant]);
+    // On joint etablissements pour pouvoir bloquer la connexion si le compte
+    // OU l'établissement rattaché a été désactivé (aucun des deux n'était
+    // vérifié auparavant : la désactivation n'avait donc aucun effet réel).
+    const [users] = await db.execute(`
+      SELECT u.*, e.statut AS etablissement_statut, e.nom AS etablissement_nom
+      FROM utilisateurs u
+      LEFT JOIN etablissements e ON u.etablissement_id = e.id
+      WHERE u.identifiant = ?
+    `, [identifiant]);
     if (users.length === 0) {
       return res.status(401).json({ error: "Identifiants ou code établissement incorrects." });
     }
@@ -71,6 +79,19 @@ exports.login = async (req, res) => {
     const validPass = await bcrypt.compare(mot_de_passe, user.mot_de_passe);
     if (!validPass) {
       return res.status(401).json({ error: "Identifiants ou code établissement incorrects." });
+    }
+
+    // Compte désactivé : on bloque avant de délivrer un token.
+    if (Number(user.statut) === 0) {
+      await enregistrerAudit(req, 'CONNEXION_REFUSEE_COMPTE_DESACTIVE', `Tentative de connexion sur le compte désactivé : ${identifiant}`);
+      return res.status(403).json({ error: "Ce compte a été désactivé. Contactez votre administrateur." });
+    }
+
+    // Établissement désactivé : bloque tous ses admins, même si leur compte
+    // individuel est encore marqué actif.
+    if (user.etablissement_id && Number(user.etablissement_statut) === 0) {
+      await enregistrerAudit(req, 'CONNEXION_REFUSEE_ETABLISSEMENT_DESACTIVE', `Tentative de connexion pour un établissement désactivé (${user.etablissement_nom}) : ${identifiant}`);
+      return res.status(403).json({ error: "L'établissement rattaché à ce compte est désactivé." });
     }
 
     const [roles] = await db.execute(`
@@ -117,6 +138,7 @@ exports.listerTousLesAdmins = async (req, res) => {
         u.identifiant, 
         u.nom, 
         u.prenom, 
+        u.statut,
         e.code_unique AS code_etablissement, 
         u.created_at 
       FROM utilisateurs u
@@ -165,14 +187,14 @@ exports.modifierAdmin = async (req, res) => {
 // 5. Activer / Désactiver un Administrateur
 exports.changerStatutAdmin = async (req, res) => {
   const { id } = req.params;
-  const { statut } = req.body; // true/1 ou false/0
+  const { actif } = req.body; // true/false — même contrat que changerStatutEtablissement
 
-  if (statut === undefined) {
-    return res.status(400).json({ error: "Le statut est requis." });
+  if (actif === undefined) {
+    return res.status(400).json({ error: "Le statut (actif/inactif) est requis." });
   }
 
   try {
-    const nouvelEtat = statut ? 1 : 0;
+    const nouvelEtat = actif ? 1 : 0;
     const [result] = await db.execute('UPDATE utilisateurs SET statut = ? WHERE id = ?', [nouvelEtat, id]);
 
     if (result.affectedRows === 0) {

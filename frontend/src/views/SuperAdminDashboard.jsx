@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { AuditLogDashboard } from '../components/AuditLogDashboard';
+// import StatusBadge from "../components/StatusBadge";
 
 // Importation des services backend
 import { fetchEtablissements, saveEtablissement, fetchAdminsSysteme } from '../services/etablissementService';
+import { fetchAnneesScolaires, saveAnneeScolaire, activerAnneeScolaire } from '../services/anneeScolaireService';
 
 // ---------------------------------------------------------------------------
 // CONTRAT D'API BACKEND (Endpoints requis) :
@@ -15,8 +17,9 @@ import { fetchEtablissements, saveEtablissement, fetchAdminsSysteme } from '../s
 //   PATCH  /api/auth/admins/:id/statut       (Activer/Désactiver admin)
 //   PATCH  /api/auth/admins/:id/reinitialiser-mot-de-passe
 //   DELETE /api/auth/admins/:id
-//   GET    /api/annees-scolaires
-//   POST   /api/annees-scolaires/activer
+//   GET    /api/annees-scolaires             (Lister)
+//   POST   /api/annees-scolaires             (Créer, inactive par défaut)
+//   PATCH  /api/annees-scolaires/:id/activer (Activer — désactive les autres)
 //   PUT    /api/parametres
 // ---------------------------------------------------------------------------
 
@@ -206,7 +209,7 @@ export default function SuperAdminDashboard() {
   const [savingParametres, setSavingParametres] = useState(false);
 
   const anneeActive = useMemo(
-    () => anneesAcademiques.find((a) => a.active || a.actif),
+    () => anneesAcademiques.find((a) => Number(a.statut) === 1),
     [anneesAcademiques]
   );
 
@@ -249,10 +252,11 @@ export default function SuperAdminDashboard() {
   const chargerAnnees = async () => {
     setLoadingAnnee(true);
     try {
-      const data = await appelApiProtegee('/api/annees-scolaires', 'GET');
+      const data = await fetchAnneesScolaires();
       setAnneesAcademiques(Array.isArray(data) ? data : data.anneesAcademiques || []);
-    } catch {
+    } catch (err) {
       setAnneesAcademiques([]);
+      afficherMessage(err.message, true);
     } finally {
       setLoadingAnnee(false);
     }
@@ -354,48 +358,48 @@ export default function SuperAdminDashboard() {
   // };
 
   const handleToggleEtabStatut = (etab) => {
-  // Le backend renvoie statut = 1 (actif) ou 0 (inactif)
-  const actif = etab.statut === 1;
+    // Le backend renvoie statut = 1 (actif) ou 0 (inactif)
+    const actif = etab.statut === 1;
 
-  demanderConfirmation({
-    titre: actif
-      ? "Désactiver cet établissement ?"
-      : "Réactiver cet établissement ?",
+    demanderConfirmation({
+      titre: actif
+        ? "Désactiver cet établissement ?"
+        : "Réactiver cet établissement ?",
 
-    message: actif
-      ? `Les utilisateurs de « ${etab.nom} » n'auront plus accès à la plateforme. Cette action est journalisée.`
-      : `« ${etab.nom} » retrouvera son accès complet.`,
+      message: actif
+        ? `Les utilisateurs de « ${etab.nom} » n'auront plus accès à la plateforme. Cette action est journalisée.`
+        : `« ${etab.nom} » retrouvera son accès complet.`,
 
-    tonalite: actif ? "danger" : "default",
+      tonalite: actif ? "danger" : "default",
 
-    libelleConfirmation: actif
-      ? "Désactiver"
-      : "Réactiver",
+      libelleConfirmation: actif
+        ? "Désactiver"
+        : "Réactiver",
 
-    icone: actif
-      ? "block"
-      : "check_circle",
+      icone: actif
+        ? "block"
+        : "check_circle",
 
-    onConfirm: async () => {
-      try {
-        // On inverse simplement l'état actuel
-        await appelApiProtegee(
-          `/api/etablissements/${etab.id}/statut`,
-          "PATCH",
-          {
-            actif: !actif
-          }
-        );
-        afficherMessage(
-          `Établissement ${actif ? "désactivé" : "réactivé"} avec succès.`
-        );
-        await chargerDonneesSysteme();
-      } catch (err) {
-        afficherMessage(err.message || "Une erreur est survenue.");
+      onConfirm: async () => {
+        try {
+          // On inverse simplement l'état actuel
+          await appelApiProtegee(
+            `/api/etablissements/${etab.id}/statut`,
+            "PATCH",
+            {
+              actif: !actif
+            }
+          );
+          afficherMessage(
+            `Établissement ${actif ? "désactivé" : "réactivé"} avec succès.`
+          );
+          await chargerDonneesSysteme();
+        } catch (err) {
+          afficherMessage(err.message || "Une erreur est survenue.");
+        }
       }
-    }
-  });
-};
+    });
+  };
 
   const handleSupprimerEtab = (etab) => {
     demanderConfirmation({
@@ -447,7 +451,7 @@ export default function SuperAdminDashboard() {
   const handleAdminEditSubmit = async (e) => {
     e.preventDefault();
     try {
-      await appelApiProtegee(`/api/auth/admins/${editionAdmin.id}`, 'PATCH', {
+      await appelApiProtegee(`/api/auth/admins/${editionAdmin.id}`, 'PUT', {
         nom: editionAdmin.nom,
         prenom: editionAdmin.prenom
       });
@@ -460,7 +464,7 @@ export default function SuperAdminDashboard() {
   };
 
   const handleToggleAdminStatut = (admin) => {
-    const actif = admin.actif !== false;
+    const actif = admin.statut === 1;
     demanderConfirmation({
       titre: actif ? "Désactiver cet administrateur ?" : "Réactiver cet administrateur ?",
       message: actif
@@ -470,9 +474,13 @@ export default function SuperAdminDashboard() {
       libelleConfirmation: actif ? 'Désactiver' : 'Réactiver',
       icone: actif ? 'person_off' : 'how_to_reg',
       onConfirm: async () => {
-        await appelApiProtegee(`/api/auth/admins/${admin.id}/statut`, 'PATCH', { actif: !actif });
-        afficherMessage(`Administrateur ${actif ? 'désactivé' : 'réactivé'} avec succès.`);
-        chargerDonneesSysteme();
+        try {
+          await appelApiProtegee(`/api/auth/admins/${admin.id}/statut`, 'PATCH', { actif: !actif });
+          afficherMessage(`Administrateur ${actif ? 'désactivé' : 'réactivé'} avec succès.`);
+          await chargerDonneesSysteme();
+        } catch (err) {
+          afficherMessage(err.message || "Une erreur est survenue.");
+        }
       }
     });
   };
@@ -485,14 +493,29 @@ export default function SuperAdminDashboard() {
       libelleConfirmation: 'Générer un mot de passe temporaire',
       icone: 'key',
       onConfirm: async () => {
+        // const nouveauMdp = genererMotDePasseTemporaire();
+        // await appelApiProtegee(`/api/auth/admins/${admin.id}/reinitialiser-mot-de-passe`, 'PATCH', {
+        //   mot_de_passe: nouveauMdp,
+        //   // doit_changer_mot_de_passe: true
+        // });
+        // afficherMessage(`Mot de passe réinitialisé pour ${admin.identifiant}.`);
+        // setPasswordModal({ identifiant: admin.identifiant, motDePasse: nouveauMdp, contexte: 'reinitialisation' });
+        // chargerDonneesSysteme();
         const nouveauMdp = genererMotDePasseTemporaire();
-        await appelApiProtegee(`/api/auth/admins/${admin.id}/reinitialiser-mot-de-passe`, 'PATCH', {
-          mot_de_passe: nouveauMdp,
-          doit_changer_mot_de_passe: true
-        });
+
+        await appelApiProtegee(
+          `/api/auth/admins/${admin.id}/reinitialiser-mot-de-passe`,
+          'PATCH',
+          {
+            nouveau_mot_de_passe: nouveauMdp
+          }
+        );
         afficherMessage(`Mot de passe réinitialisé pour ${admin.identifiant}.`);
-        setPasswordModal({ identifiant: admin.identifiant, motDePasse: nouveauMdp, contexte: 'reinitialisation' });
-        chargerDonneesSysteme();
+        setPasswordModal({
+          identifiant: admin.identifiant,
+          motDePasse: nouveauMdp,
+          contexte: 'reinitialisation'
+        });
       }
     });
   };
@@ -514,6 +537,8 @@ export default function SuperAdminDashboard() {
   };
 
   // ---- ANNÉE ACADÉMIQUE ----------------------------------------------
+  // Crée une nouvelle année (inactive), puis l'active immédiatement.
+  // Deux appels distincts car le backend n'a pas d'endpoint combiné.
   const handleActiverAnnee = (e) => {
     e.preventDefault();
     const nouvelleAnnee = { ...formAnnee };
@@ -527,9 +552,29 @@ export default function SuperAdminDashboard() {
       libelleConfirmation: 'Activer cette année',
       icone: 'event_available',
       onConfirm: async () => {
-        await appelApiProtegee('/api/annees-scolaires/activer', 'POST', nouvelleAnnee);
+        const { id } = await saveAnneeScolaire(nouvelleAnnee);
+        await activerAnneeScolaire(id);
         afficherMessage(`Année académique « ${nouvelleAnnee.libelle} » activée.`);
         setFormAnnee({ libelle: '', date_debut: '', date_fin: '' });
+        chargerAnnees();
+      }
+    });
+  };
+
+  // Réactive une année déjà présente dans l'historique (ex: revenir sur une
+  // année passée), sans repasser par la création.
+  const handleActiverAnneeExistante = (annee) => {
+    demanderConfirmation({
+      titre: 'Activer cette année académique ?',
+      message: anneeActive
+        ? `L'année « ${anneeActive.libelle} » sera clôturée et « ${annee.libelle} » redeviendra l'année active pour tous les établissements.`
+        : `« ${annee.libelle} » deviendra l'année académique active globalement.`,
+      tonalite: 'danger',
+      libelleConfirmation: 'Activer cette année',
+      icone: 'event_available',
+      onConfirm: async () => {
+        await activerAnneeScolaire(annee.id);
+        afficherMessage(`Année académique « ${annee.libelle} » activée.`);
         chargerAnnees();
       }
     });
@@ -773,44 +818,37 @@ export default function SuperAdminDashboard() {
                   <Icon name="add" style={{ fontSize: '18px' }} /> Nouveau Établissement
                 </button>
               </div>
-
               <table className="yk-table">
                 <thead>
-                  <tr><th>Établissement</th><th>Code d'isolement</th><th>Localisation</th><th>Téléphone</th><th>Statut</th><th style={{ textAlign: 'right' }}>Actions</th></tr>
+                  <tr>
+                    <th>Établissement</th>
+                    <th>Code d'isolement</th>
+                    <th>Localisation</th>
+                    <th>Téléphone</th>
+                    <th>Statut</th>
+                    <th style={{ textAlign: 'right' }}>Actions</th>
+                  </tr>
                 </thead>
-                <tbody>
-                  {loadingEtab ? (
-                    <LignesSquelette colonnes={6} lignes={4} />
-                  ) : etablissements.length === 0 ? (
-                    <tr><td colSpan="6" style={{ textAlign: 'center', color: 'var(--yk-muted)', padding: '24px' }}>Aucun établissement enregistré.</td></tr>
-                  ) : etablissements.map(etab => {
-                    const actif = etab.statut === 1;
-                    return (
-                      <tr key={etab.id}>
+                <tbody> {
+                  loadingEtab ? (<LignesSquelette colonnes={6} lignes={4} />) : etablissements.length === 0 ? (
+                    <tr>
+                      <td colSpan="6" style={{ textAlign: 'center', color: 'var(--yk-muted)', padding: '24px' }}>Aucun établissement enregistré.</td>
+                    </tr>) : etablissements.map(etab => {
+                      const actif = etab.statut === 1;
+                      return (<tr key={etab.id}>
                         <td style={{ fontWeight: 600 }}>{etab.nom}</td>
                         <td><span className="yk-code-chip">{etab.code_unique}</span></td>
                         <td>{etab.adresse || 'Non renseignée'}</td>
-                        <td>{etab.telephone || '—'}</td>
-                        <td><StatusBadge actif={actif} /></td>
+                        <td>{etab.telephone || '—'}</td> <td><StatusBadge actif={actif} /></td>
                         <td>
                           <div className="yk-actions-cell">
-                            <ActionButton
-                              icon="edit"
-                              label="Modifier"
-                              onClick={() => setEditionEtab({ id: etab.id, nom: etab.nom, code_unique: etab.code_unique, adresse: etab.adresse || '', telephone: etab.telephone || '' })}
-                            />
-                            <ActionButton
-                              icon={actif ? 'block' : 'check_circle'}
-                              label={actif ? 'Désactiver' : 'Réactiver'}
-                              tone={actif ? 'warn' : 'default'}
-                              onClick={() => handleToggleEtabStatut(etab)}
-                            />
+                            <ActionButton icon="edit" label="Modifier" onClick={() => setEditionEtab({ id: etab.id, nom: etab.nom, code_unique: etab.code_unique, adresse: etab.adresse || '', telephone: etab.telephone || '' })} />
+                            <ActionButton icon={actif ? 'block' : 'check_circle'} label={actif ? 'Désactiver' : 'Réactiver'} tone={actif ? 'warn' : 'default'} onClick={() => handleToggleEtabStatut(etab)} />
                             <ActionButton icon="delete" label="Supprimer" tone="danger" onClick={() => handleSupprimerEtab(etab)} />
                           </div>
                         </td>
-                      </tr>
-                    );
-                  })}
+                      </tr>);
+                    })}
                 </tbody>
               </table>
             </div>
@@ -841,24 +879,67 @@ export default function SuperAdminDashboard() {
                   ) : admins.length === 0 ? (
                     <tr><td colSpan="5" style={{ textAlign: 'center', color: 'var(--yk-muted)', padding: '24px' }}>Aucun administrateur enregistré.</td></tr>
                   ) : admins.map(adm => {
-                    const actif = adm.actif !== false;
+                    const actif = Number(adm.statut) === 1;
+
                     return (
                       <tr key={adm.id}>
-                        <td style={{ fontWeight: 600 }}>{adm.nom} {adm.prenom}</td>
+                        <td style={{ fontWeight: 600 }}>
+                          {adm.nom} {adm.prenom}
+                        </td>
+
                         <td>{adm.identifiant}</td>
-                        <td><span style={{ background: '#e0e7ff', color: '#4338ca', padding: '3px 8px', borderRadius: '4px', fontWeight: 'bold' }}>{adm.code_etablissement}</span></td>
-                        <td><StatusBadge actif={actif} /></td>
+
+                        <td>
+                          <span style={{
+                            background: '#e0e7ff',
+                            color: '#4338ca',
+                            padding: '3px 8px',
+                            borderRadius: '4px',
+                            fontWeight: 'bold'
+                          }}>
+                            {adm.code_etablissement}
+                          </span>
+                        </td>
+
+                        <td>
+                          <StatusBadge actif={actif} />
+                        </td>
+
                         <td>
                           <div className="yk-actions-cell">
-                            <ActionButton icon="edit" label="Modifier les infos" onClick={() => setEditionAdmin({ id: adm.id, nom: adm.nom, prenom: adm.prenom || '' })} />
-                            <ActionButton icon="key" label="Réinitialiser le mot de passe" onClick={() => handleReinitialiserMdpAdmin(adm)} />
+
+                            <ActionButton
+                              icon="edit"
+                              label="Modifier les infos"
+                              onClick={() =>
+                                setEditionAdmin({
+                                  id: adm.id,
+                                  nom: adm.nom,
+                                  prenom: adm.prenom || ''
+                                })
+                              }
+                            />
+
+                            <ActionButton
+                              icon="key"
+                              label="Réinitialiser le mot de passe"
+                              onClick={() => handleReinitialiserMdpAdmin(adm)}
+                            />
+
                             <ActionButton
                               icon={actif ? 'person_off' : 'how_to_reg'}
                               label={actif ? 'Désactiver' : 'Réactiver'}
                               tone={actif ? 'warn' : 'default'}
                               onClick={() => handleToggleAdminStatut(adm)}
                             />
-                            <ActionButton icon="delete" label="Supprimer" tone="danger" onClick={() => handleSupprimerAdmin(adm)} />
+
+                            <ActionButton
+                              icon="delete"
+                              label="Supprimer"
+                              tone="danger"
+                              onClick={() => handleSupprimerAdmin(adm)}
+                            />
+
                           </div>
                         </td>
                       </tr>
@@ -898,21 +979,33 @@ export default function SuperAdminDashboard() {
               <h3 style={{ margin: '0 0 16px 0', fontSize: '15px', fontWeight: 700 }}>Historique des Années Académiques</h3>
               <table className="yk-table">
                 <thead>
-                  <tr><th>Libellé / Session</th><th>Date de début</th><th>Date de clôture</th><th>Statut</th></tr>
+                  <tr><th>Libellé / Session</th><th>Date de début</th><th>Date de clôture</th><th>Statut</th><th></th></tr>
                 </thead>
                 <tbody>
                   {loadingAnnee ? (
-                    <LignesSquelette colonnes={4} lignes={3} />
+                    <LignesSquelette colonnes={5} lignes={3} />
                   ) : anneesAcademiques.length === 0 ? (
-                    <tr><td colSpan="4" style={{ textAlign: 'center', color: 'var(--yk-muted)', padding: '24px' }}>Aucune année académique enregistrée dans l'historique.</td></tr>
-                  ) : anneesAcademiques.map(annee => (
-                    <tr key={annee.id}>
-                      <td style={{ fontWeight: 600 }}>{annee.libelle}</td>
-                      <td>{formaterDate(annee.date_debut)}</td>
-                      <td>{formaterDate(annee.date_fin)}</td>
-                      <td><StatusBadge actif={!!(annee.active || annee.actif)} labelActif="Active" labelInactif="Clôturée" /></td>
-                    </tr>
-                  ))}
+                    <tr><td colSpan="5" style={{ textAlign: 'center', color: 'var(--yk-muted)', padding: '24px' }}>Aucune année académique enregistrée dans l'historique.</td></tr>
+                  ) : anneesAcademiques.map(annee => {
+                    const active = Number(annee.statut) === 1;
+                    return (
+                      <tr key={annee.id}>
+                        <td style={{ fontWeight: 600 }}>{annee.libelle}</td>
+                        <td>{formaterDate(annee.date_debut)}</td>
+                        <td>{formaterDate(annee.date_fin)}</td>
+                        <td><StatusBadge actif={active} labelActif="Active" labelInactif="Clôturée" /></td>
+                        <td style={{ textAlign: 'right' }}>
+                          {!active && (
+                            <ActionButton
+                              icon="event_available"
+                              label="Activer cette année"
+                              onClick={() => handleActiverAnneeExistante(annee)}
+                            />
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
