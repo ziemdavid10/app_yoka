@@ -13,10 +13,10 @@ exports.verifierAuth = (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    
+
     // C'est cette ligne qui évite le "undefined" dans les contrôleurs !
-    req.user = decoded; 
-    
+    req.user = decoded;
+
     next();
   } catch (error) {
     return res.status(403).json({ error: "Session expirée ou token invalide. Veuillez vous reconnecter." });

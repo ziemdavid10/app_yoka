@@ -207,6 +207,7 @@ export default function SuperAdminDashboard() {
     alerteEchecConnexion: true
   });
   const [savingParametres, setSavingParametres] = useState(false);
+  const [loadingParametres, setLoadingParametres] = useState(true);
 
   const anneeActive = useMemo(
     () => anneesAcademiques.find((a) => Number(a.statut) === 1),
@@ -262,10 +263,30 @@ export default function SuperAdminDashboard() {
     }
   };
 
+  const chargerParametres = async () => {
+    setLoadingParametres(true);
+    try {
+      const data = await appelApiProtegee('/api/parametres');
+      setParametres({
+        exigerChangementMdp: data.exigerChangementMdp,
+        dureeSessionHeures: data.dureeSessionHeures,
+        retentionLogsJours: data.retentionLogsJours,
+        notifActionsSensibles: data.notifActionsSensibles,
+        frequenceSauvegarde: data.frequenceSauvegarde,
+        alerteEchecConnexion: data.alerteEchecConnexion
+      });
+    } catch (err) {
+      afficherMessage(err.message, true);
+    } finally {
+      setLoadingParametres(false);
+    }
+  };
+
   useEffect(() => {
     loadGoogleIconsFont();
     chargerDonneesSysteme();
     chargerAnnees();
+    chargerParametres();
   }, []);
 
   useEffect(() => {
@@ -584,7 +605,22 @@ export default function SuperAdminDashboard() {
   const handleEnregistrerParametres = async () => {
     setSavingParametres(true);
     try {
-      await appelApiProtegee('/api/parametres', 'PUT', parametres);
+      const data = await appelApiProtegee('/api/parametres', 'PUT', {
+        exigerChangementMdp: parametres.exigerChangementMdp,
+        dureeSessionHeures: Number(parametres.dureeSessionHeures),
+        retentionLogsJours: Number(parametres.retentionLogsJours),
+        notifActionsSensibles: parametres.notifActionsSensibles,
+        frequenceSauvegarde: parametres.frequenceSauvegarde,
+        alerteEchecConnexion: parametres.alerteEchecConnexion
+      });
+      setParametres({
+        exigerChangementMdp: data.exigerChangementMdp,
+        dureeSessionHeures: data.dureeSessionHeures,
+        retentionLogsJours: data.retentionLogsJours,
+        notifActionsSensibles: data.notifActionsSensibles,
+        frequenceSauvegarde: data.frequenceSauvegarde,
+        alerteEchecConnexion: data.alerteEchecConnexion
+      });
       afficherMessage('Configuration système mise à jour.');
     } catch (err) {
       afficherMessage(err.message, true);
@@ -596,6 +632,7 @@ export default function SuperAdminDashboard() {
   const actualiserTout = () => {
     chargerDonneesSysteme();
     chargerAnnees();
+    chargerParametres();
   };
 
   return (
@@ -1022,6 +1059,12 @@ export default function SuperAdminDashboard() {
         {/* 6. CONFIGURATION */}
         {activeTab === 'parametres' && (
           <div className="yk-fade-in">
+            {loadingParametres && (
+              <div className="yk-alert" style={{ background: '#eff6ff', color: '#1e40af' }}>
+                Chargement de la configuration système…
+              </div>
+            )}
+            <fieldset disabled={loadingParametres} style={{ border: 'none', padding: 0, margin: 0 }}>
             <div className="yk-settings-grid">
               <div className="yk-card">
                 <div className="yk-settings-section-title"><Icon name="security" /> Sécurité &amp; Sessions</div>
@@ -1089,9 +1132,10 @@ export default function SuperAdminDashboard() {
                 />
               </div>
             </div>
+            </fieldset>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '24px' }}>
-              <button className="yk-btn yk-btn-primary" onClick={handleEnregistrerParametres} disabled={savingParametres}>
+              <button className="yk-btn yk-btn-primary" onClick={handleEnregistrerParametres} disabled={savingParametres || loadingParametres}>
                 {savingParametres ? 'Enregistrement…' : 'Enregistrer la configuration globale'}
               </button>
             </div>

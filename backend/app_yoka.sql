@@ -513,6 +513,8 @@ CREATE INDEX idx_annee_statut ON annees_scolaires(statut);
 DESCRIBE etablissements;
 SELECT * FROM utilisateurs;
 
+ALTER TABLE annees_scolaires ADD COLUMN date_debut DATE NULL, ADD COLUMN date_fin DATE NULL;
+
 INSERT INTO etablissements (nom, code_unique, adresse, telephone, statut) VALUES
 ('Campus Principal - BERTOUA', 'CAMPUS2', 'Avenue Monseigneur Vogt, Yaoundé', '+237 690000001', 1),
 ('Campus Annexe - DOUME', 'CAMPUS3', 'Boulevard de la Liberté, Douala', '+237 690000002', 1),
@@ -537,3 +539,42 @@ ADD COLUMN statut TINYINT(1) DEFAULT 1 AFTER telephone;
 
 -- 2. Index pour optimiser les requêtes sur l'année scolaire active
 CREATE INDEX idx_annee_statut ON annees_scolaires(statut);
+
+
+
+-- Table de configuration système globale.
+-- C'est une table "singleton" : une seule ligne (id = 1) contient toujours
+-- l'état courant de la configuration, mise à jour via PUT /api/parametres.
+
+CREATE TABLE IF NOT EXISTS parametres_systeme (
+  id                       TINYINT UNSIGNED NOT NULL PRIMARY KEY DEFAULT 1,
+
+  -- Sécurité & Sessions
+  exiger_changement_mdp    TINYINT(1)       NOT NULL DEFAULT 1,
+  duree_session_heures     SMALLINT UNSIGNED NOT NULL DEFAULT 8,
+
+  -- Journalisation & Rétention
+  retention_logs_jours     SMALLINT UNSIGNED NOT NULL DEFAULT 365,
+  notif_actions_sensibles  TINYINT(1)       NOT NULL DEFAULT 1,
+
+  -- Sauvegardes automatisées
+  frequence_sauvegarde     ENUM('quotidienne', 'hebdomadaire') NOT NULL DEFAULT 'quotidienne',
+
+  -- Alertes de sécurité
+  alerte_echec_connexion   TINYINT(1)       NOT NULL DEFAULT 1,
+
+  -- Traçabilité de la dernière modification
+  modifie_par              INT UNSIGNED     NULL,
+  modifie_le                DATETIME        NULL,
+
+  CONSTRAINT chk_parametres_singleton CHECK (id = 1)
+  -- Décommentez si votre table `utilisateurs` a bien un id INT UNSIGNED :
+  -- , CONSTRAINT fk_parametres_modifie_par FOREIGN KEY (modifie_par) REFERENCES utilisateurs(id) ON DELETE SET NULL
+);
+
+-- Amorce la ligne unique avec les valeurs par défaut si elle n'existe pas encore
+-- (correspond exactement aux valeurs par défaut du state React `parametres`).
+INSERT INTO parametres_systeme (id, exiger_changement_mdp, duree_session_heures, retention_logs_jours,
+                                 notif_actions_sensibles, frequence_sauvegarde, alerte_echec_connexion)
+VALUES (1, 1, 8, 365, 1, 'quotidienne', 1)
+ON DUPLICATE KEY UPDATE id = id;
