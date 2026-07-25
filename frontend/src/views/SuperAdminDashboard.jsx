@@ -842,9 +842,23 @@ export default function SuperAdminDashboard() {
           </div>
         )}
 
-        {/* 2. ÉTABLISSEMENTS */}
+                {/* 2. ÉTABLISSEMENTS */}
         {activeTab === 'etablissements' && (
           <div className="yk-fade-in">
+            <style>{`
+              .yk-row-inactif td { background: #fafafa; }
+              .yk-row-inactif:hover td { background: #f4f4f5; }
+              .yk-table tbody tr td:first-child { box-shadow: inset 3px 0 0 transparent; }
+              .yk-table tbody tr.yk-row-actif td:first-child { box-shadow: inset 3px 0 0 #22c55e; }
+              .yk-row-inactif td:first-child { box-shadow: inset 3px 0 0 #cbd5e1; }
+              .yk-etab-nom-cell { display: flex; align-items: center; gap: 9px; }
+              .yk-etab-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+              .yk-etab-dot.actif { background: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,0.15); }
+              .yk-etab-dot.inactif { background: #cbd5e1; }
+              .yk-row-inactif .yk-etab-nom-texte { color: #94a3b8; }
+              .yk-row-inactif .yk-code-chip { opacity: 0.6; }
+              .yk-row-inactif .yk-cell-muted { color: #a3a9b4; }
+            `}</style>
             <div className="yk-card">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                 <div>
@@ -862,30 +876,39 @@ export default function SuperAdminDashboard() {
                     <th>Code d'isolement</th>
                     <th>Localisation</th>
                     <th>Téléphone</th>
-                    <th>Statut</th>
+                    {/* <th>Statut</th> */}
                     <th style={{ textAlign: 'right' }}>Actions</th>
                   </tr>
                 </thead>
-                <tbody> {
-                  loadingEtab ? (<LignesSquelette colonnes={6} lignes={4} />) : etablissements.length === 0 ? (
+                <tbody>
+                  {loadingEtab ? (<LignesSquelette colonnes={6} lignes={4} />) : etablissements.length === 0 ? (
                     <tr>
                       <td colSpan="6" style={{ textAlign: 'center', color: 'var(--yk-muted)', padding: '24px' }}>Aucun établissement enregistré.</td>
-                    </tr>) : etablissements.map(etab => {
-                      const actif = etab.statut === 1;
-                      return (<tr key={etab.id}>
-                        <td style={{ fontWeight: 600 }}>{etab.nom}</td>
+                    </tr>
+                  ) : etablissements.map(etab => {
+                    const actif = etab.statut === 1;
+                    return (
+                      <tr key={etab.id} className={actif ? 'yk-row-actif' : 'yk-row-inactif'}>
+                        <td style={{ fontWeight: 600 }}>
+                          <div className="yk-etab-nom-cell">
+                            <span className={`yk-etab-dot ${actif ? 'actif' : 'inactif'}`} title={actif ? 'Actif' : 'Inactif'} />
+                            <span className="yk-etab-nom-texte">{etab.nom}</span>
+                          </div>
+                        </td>
                         <td><span className="yk-code-chip">{etab.code_unique}</span></td>
-                        <td>{etab.adresse || 'Non renseignée'}</td>
-                        <td>{etab.telephone || '—'}</td> <td><StatusBadge actif={actif} /></td>
+                        <td className="yk-cell-muted">{etab.adresse || 'Non renseignée'}</td>
+                        <td className="yk-cell-muted">{etab.telephone || '—'}</td>
+                        {/* <td><StatusBadge actif={actif} /></td> */}
                         <td>
                           <div className="yk-actions-cell">
                             <ActionButton icon="edit" label="Modifier" onClick={() => setEditionEtab({ id: etab.id, nom: etab.nom, code_unique: etab.code_unique, adresse: etab.adresse || '', telephone: etab.telephone || '' })} />
-                            <ActionButton icon={actif ? 'block' : 'check_circle'} label={actif ? 'Désactiver' : 'Réactiver'} tone={actif ? 'warn' : 'default'} onClick={() => handleToggleEtabStatut(etab)} />
+                            {/* <ActionButton icon={actif ? 'block' : 'check_circle'} label={actif ? 'Désactiver' : 'Réactiver'} tone={actif ? 'warn' : 'default'} onClick={() => handleToggleEtabStatut(etab)} /> */}
                             <ActionButton icon="delete" label="Supprimer" tone="danger" onClick={() => handleSupprimerEtab(etab)} />
                           </div>
                         </td>
-                      </tr>);
-                    })}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

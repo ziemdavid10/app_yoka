@@ -578,3 +578,170 @@ INSERT INTO parametres_systeme (id, exiger_changement_mdp, duree_session_heures,
                                  notif_actions_sensibles, frequence_sauvegarde, alerte_echec_connexion)
 VALUES (1, 1, 8, 365, 1, 'quotidienne', 1)
 ON DUPLICATE KEY UPDATE id = id;
+
+SHOW TABLES;
+-- À exécuter directement sur ta base app_yoka (celle qui contient déjà tes vraies tables).
+--
+-- But : dire à Knex "ces 20 migrations ont déjà été appliquées manuellement",
+-- pour qu'il ne cherche plus jamais à les rejouer, sans toucher à tes données.
+--
+-- Prérequis : la table knex_migrations doit déjà exister (créée automatiquement
+-- par ta tentative de "npx knex migrate:latest" précédente). Si elle n'existe
+-- pas encore, lance d'abord une fois "npx knex migrate:latest" (même si ça
+-- échoue sur la 1ère migration, la table de suivi aura été créée avant l'échec).
+
+USE app_yoka;
+
+INSERT INTO knex_migrations (name, batch, migration_time) VALUES
+('20260101000001_create_core_reference_tables.js', 1, NOW()),
+('20260101000002_create_utilisateurs.js', 1, NOW()),
+('20260101000003_create_classes.js', 1, NOW()),
+('20260101000004_create_eleves.js', 1, NOW()),
+('20260101000005_create_depenses.js', 1, NOW()),
+('20260101000006_create_utilisateur_roles.js', 1, NOW()),
+('20260101000007_create_inscriptions.js', 1, NOW()),
+('20260101000008_create_audit_logs.js', 1, NOW()),
+('20260101000009_create_paiements.js', 1, NOW()),
+('20260101000010_create_evaluations_and_notes.js', 1, NOW()),
+('20260101000011_create_configurations_frais_and_tranches_config.js', 1, NOW()),
+('20260101000012_create_classe_tranches.js', 1, NOW()),
+('20260101000013_add_frais_fields_to_classes.js', 1, NOW()),
+('20260101000014_add_tranche_reference_to_paiements.js', 1, NOW()),
+('20260101000015_add_categorie_to_paiements.js', 1, NOW()),
+('20260101000016_harden_classe_tranches_montant.js', 1, NOW()),
+('20260101000017_add_annee_scolaire_links.js', 1, NOW()),
+('20260101000018_add_dates_and_index_to_annees_scolaires.js', 1, NOW()),
+('20260101000019_add_statut_to_etablissements.js', 1, NOW()),
+('20260101000020_create_parametres_systeme.js', 1, NOW());
+
+-- Vérification :
+SELECT * FROM knex_migrations ORDER BY id;
+
+DESCRIBE classes;
+DESCRIBE paiements;
+
+USE app_yoka;
+
+-- On retire ces deux entrées du registre Knex : elles avaient été marquées
+-- "déjà appliquées" par erreur, alors que les colonnes correspondantes
+-- (classes.frais_ape / paiements.categorie) n'ont en réalité jamais été
+-- créées avec succès dans ton historique Workbench.
+
+DELETE FROM knex_migrations
+WHERE name IN (
+  '20260101000013_add_frais_fields_to_classes.js',
+  '20260101000015_add_categorie_to_paiements.js'
+);
+
+-- Vérification : il ne doit plus rester que 18 lignes
+SELECT * FROM knex_migrations ORDER BY id;
+
+
+SET SQL_SAFE_UPDATES = 0;
+
+DELETE FROM knex_migrations
+WHERE name IN (
+  '20260101000013_add_frais_fields_to_classes.js',
+  '20260101000015_add_categorie_to_paiements.js'
+);
+
+SET SQL_SAFE_UPDATES = 1; -- on remet la protection après
+
+SELECT * FROM knex_migrations ORDER BY id;
+
+SET autocommit = 1;
+USE app_yoka;
+
+-- ============================================================================
+-- 1) CLASSES : il ne manque que frais_examen et frais_ape
+--    (est_classe_examen existe déjà, on n'y touche pas)
+-- ============================================================================
+ALTER TABLE classes
+  ADD COLUMN frais_examen DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER est_classe_examen,
+  ADD COLUMN frais_ape    DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER frais_examen;
+
+-- ============================================================================
+-- 2) PAIEMENTS : ajout de categorie + reprise des données + élargissement
+--    de type_versement + garde-fou sur le montant
+-- ============================================================================
+ALTER TABLE paiements
+  ADD COLUMN categorie ENUM('SCOLARITE','APE','EXAMEN') NOT NULL DEFAULT 'SCOLARITE' AFTER montant;
+
+-- Reprise des données historiques : déduire la catégorie de l'ancien texte libre
+UPDATE paiements SET categorie = 'APE'    WHERE type_versement LIKE '%APE%';
+UPDATE paiements SET categorie = 'EXAMEN' WHERE type_versement LIKE '%exam%';
+-- Le reste demeure SCOLARITE (valeur par défaut)
+
+-- type_versement doit pouvoir accueillir des libellés plus longs
+ALTER TABLE paiements MODIFY type_versement VARCHAR(150) NOT NULL DEFAULT 'Tranche 1';
+
+-- Garde-fou : un montant de paiement doit être strictement positif
+ALTER TABLE paiements
+  ADD CONSTRAINT chk_paiement_montant_positif CHECK (montant > 0);
+
+-- ============================================================================
+-- 3) Vérification
+-- ============================================================================
+DESCRIBE classes;
+DESCRIBE paiements;
+
+-- ============================================================================
+-- 4) Remettre Knex à jour : ces deux migrations sont maintenant vraiment
+--    appliquées, on peut les remarquer comme faites pour qu'il ne les
+--    rejoue plus jamais.
+-- ============================================================================
+INSERT INTO knex_migrations (name, batch, migration_time) VALUES
+('20260101000013_add_frais_fields_to_classes.js', 1, NOW()),
+('20260101000015_add_categorie_to_paiements.js', 1, NOW());
+
+SELECT * FROM knex_migrations ORDER BY id;
+
+DESCRIBE classes;
+
+-- ============================================================================
+-- 4) Remettre Knex à jour : ces deux migrations sont maintenant vraiment
+--    appliquées, on peut les remarquer comme faites pour qu'il ne les
+--    rejoue plus jamais.
+-- ============================================================================
+INSERT INTO knex_migrations (name, batch, migration_time) VALUES
+('20260101000013_add_frais_fields_to_classes.js', 1, NOW()),
+('20260101000015_add_categorie_to_paiements.js', 1, NOW());
+
+SELECT * FROM knex_migrations ORDER BY id;
+
+SELECT * FROM knex_migrations;
+
+DESCRIBE classes;
+DESCRIBE paiements;
+
+
+USE app_yoka;
+
+-- Nécessaire car type_versement n'est pas une colonne clé
+SET SQL_SAFE_UPDATES = 0;
+
+-- Reprise des données historiques (probablement bloquée la dernière fois)
+UPDATE paiements SET categorie = 'APE'    WHERE type_versement LIKE '%APE%';
+UPDATE paiements SET categorie = 'EXAMEN' WHERE type_versement LIKE '%exam%';
+
+SET SQL_SAFE_UPDATES = 1;
+
+-- type_versement doit pouvoir accueillir des libellés plus longs
+ALTER TABLE paiements MODIFY type_versement VARCHAR(150) NOT NULL DEFAULT 'Tranche 1';
+
+-- Garde-fou : un montant de paiement doit être strictement positif
+ALTER TABLE paiements
+  ADD CONSTRAINT chk_paiement_montant_positif CHECK (montant > 0);
+
+-- Marquer les deux migrations comme faites, maintenant qu'elles le sont vraiment
+INSERT INTO knex_migrations (name, batch, migration_time) VALUES
+('20260101000013_add_frais_fields_to_classes.js', 1, NOW()),
+('20260101000015_add_categorie_to_paiements.js', 1, NOW());
+
+-- Vérification
+DESCRIBE paiements;
+SELECT * FROM knex_migrations ORDER BY id;
+
+SELECT * FROM knex_migrations;
+
+ALTER TABLE etablissements ADD COLUMN statut VARCHAR(20) DEFAULT 'actif';

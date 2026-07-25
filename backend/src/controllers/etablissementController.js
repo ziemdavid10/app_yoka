@@ -85,17 +85,24 @@ exports.changerStatutEtablissement = async (req, res) => {
     });
   }
   try {
-    // Conversion du booléen en entier pour la base de données
     const statut = actif ? 1 : 0;
-    const [result] = await db.execute(
-      'UPDATE etablissements SET statut = ? WHERE id = ?',
-      [statut, id]
-    );
-    if (result.affectedRows === 0) {
+
+    // On vérifie l'existence séparément de la mise à jour : par défaut,
+    // MySQL ne compte dans affectedRows que les lignes dont la valeur a
+    // réellement changé, pas celles simplement trouvées par le WHERE.
+    // Sans cette vérification préalable, (ré)activer un établissement déjà
+    // dans l'état demandé renvoyait à tort "Établissement introuvable".
+    const [existant] = await db.execute('SELECT id FROM etablissements WHERE id = ?', [id]);
+    if (existant.length === 0) {
       return res.status(404).json({
         error: "Établissement introuvable."
       });
     }
+
+    await db.execute(
+      'UPDATE etablissements SET statut = ? WHERE id = ?',
+      [statut, id]
+    );
     const action = actif
       ? 'ACTIVATION_ETABLISSEMENT'
       : 'DESACTIVATION_ETABLISSEMENT';
