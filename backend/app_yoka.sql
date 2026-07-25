@@ -745,3 +745,18 @@ SELECT * FROM knex_migrations ORDER BY id;
 SELECT * FROM knex_migrations;
 
 ALTER TABLE etablissements ADD COLUMN statut VARCHAR(20) DEFAULT 'actif';
+
+SELECT * FROM etablissements;
+
+USE app_yoka;
+
+-- 1. Ajouter la colonne frais_ape dans classes (si elle n'existe pas)
+ALTER TABLE classes 
+ADD COLUMN frais_ape DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER frais_scolarite;
+
+-- 2. Ajouter la colonne categorie dans paiements (si elle n'existe pas)
+ALTER TABLE paiements 
+ADD COLUMN categorie ENUM('SCOLARITE','APE','EXAMEN') NOT NULL DEFAULT 'SCOLARITE' AFTER montant;
+
+ALTER TABLE classes
+ADD COLUMN frais_examen DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER est_classe_examen;
