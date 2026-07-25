@@ -1,11 +1,20 @@
 {
   "name": "backend",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "server.js",
+  "bin": "server.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "build:exe": "pkg . --targets node20-win-x64 --output dist/app_yoka_backend.exe"
+  },
+  "pkg": {
+    "assets": [
+      "src/config/app_yoka.sql",
+      "public/**/*",
+      "node_modules/sqlite3/lib/binding/**"
+    ]
   },
   "keywords": [],
   "author": "",
@@ -18,7 +27,7 @@
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.2.0",
-    "mysql2": "^3.22.5",
+    "sqlite3": "^6.0.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

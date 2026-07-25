@@ -4,6 +4,8 @@ const dotenv = require('dotenv');
 const bcrypt = require('bcryptjs');
 const db = require('./src/config/db');
 const path = require('path');
+const fs = require('fs'); // Détection et lecture sécurisée des fichiers
+const { exec } = require('child_process'); // Lancement du navigateur par défaut
 
 const authRoutes = require('./src/routes/authRoutes');
 const eleveRoutes = require('./src/routes/eleveRoutes');
@@ -15,7 +17,7 @@ const etablissementRoutes = require('./src/routes/etablissementRoutes');
 const anneeScolaireRoutes = require('./src/routes/anneeScolaireRoutes');
 const parametresRoutes = require('./src/routes/parametresRoutes');
 
-dotenv.config({ path: path.join(process.cwd(), '.env') });
+dotenv.config({ path: path.join(__dirname, '.env') });
 
 const app = express();
 
@@ -34,14 +36,37 @@ app.use('/api/etablissements', etablissementRoutes);
 app.use('/api/annees-scolaires', anneeScolaireRoutes);
 app.use('/api/parametres', parametresRoutes);
 
-// Servir les fichiers statiques du Frontend React (Dossier 'public' à côté de server.exe)
-app.use(express.static(path.join(process.cwd(), 'public')));
+// --- GESTION DU FRONTEND REACT ---
 
-// Redirection SPA React (Attrape toutes les routes non-API)
-app.use((req, res) => {
-  res.sendFile(path.join(process.cwd(), 'public', 'index.html'));
+// 1. Détection intelligente du chemin 'public' (Virtuel PKG vs Réel)
+let publicPath = path.join(__dirname, 'public');
+
+// Si index.html n'est pas embarqué dans l'exécutable, on cherche dans un dossier 'public' externe à côté du .exe
+if (!fs.existsSync(path.join(publicPath, 'index.html'))) {
+  const exeDir = typeof process.pkg !== 'undefined' ? path.dirname(process.execPath) : process.cwd();
+  publicPath = path.join(exeDir, 'public');
+}
+
+console.log(` Dossier Frontend utilisé : ${publicPath}`);
+
+// 2. Servir les fichiers statiques (JS, CSS, images)
+app.use(express.static(publicPath));
+
+/// 3. Redirection SPA React (Compatible Express v5)
+app.use((req, res, next) => {
+  // 1. Si la requête commence par /api, on laisse passer vers la gestion 404 API
+  if (req.path.startsWith('/api')) {
+    return res.status(404).json({ error: "Route API introuvable." });
+  }
+
+  // 2. Pour toutes les autres routes (ex: /login, /dashboard), on renvoie index.html
+  const indexPath = path.join(publicPath, 'index.html');
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    res.status(404).send(" Erreur : Le fichier index.html du Frontend est introuvable.");
+  }
 });
-
 /**
  * Script d'initialisation sécurisé des comptes administrateurs par défaut
  */
@@ -74,7 +99,7 @@ async function initialiserAdministrateurs() {
       console.log(' Le compte [superyoka] existe déjà. Initialisation ignorée.');
     }
 
-    // 2. Initialisation de l\'ADMIN CAMPUS (admin_campus)
+    // 2. Initialisation de l'ADMIN CAMPUS (admin_campus)
     const [adminCampusRows] = await db.execute(
       'SELECT id FROM utilisateurs WHERE identifiant = ?', 
       ['admin_campus']
@@ -109,8 +134,12 @@ async function initialiserAdministrateurs() {
 // Lancement du serveur
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
-  console.log(`Le serveur tourne sur : http://localhost:${PORT}`);
+  const url = `http://localhost:${PORT}`;
+  console.log(`Le serveur tourne sur : ${url}`);
   
-  // Exécution du script de seeding au démarrage
+  // 1. Exécution du script de seeding au démarrage
   await initialiserAdministrateurs();
+
+  // 2. Ouverture automatique du navigateur par défaut sous Windows
+  exec(`start ${url}`);
 });
