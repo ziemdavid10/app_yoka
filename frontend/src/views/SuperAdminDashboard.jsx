@@ -876,7 +876,7 @@ export default function SuperAdminDashboard() {
                     <th>Code d'isolement</th>
                     <th>Localisation</th>
                     <th>Téléphone</th>
-                    {/* <th>Statut</th> */}
+                    <th>Statut</th>
                     <th style={{ textAlign: 'right' }}>Actions</th>
                   </tr>
                 </thead>
@@ -898,11 +898,11 @@ export default function SuperAdminDashboard() {
                         <td><span className="yk-code-chip">{etab.code_unique}</span></td>
                         <td className="yk-cell-muted">{etab.adresse || 'Non renseignée'}</td>
                         <td className="yk-cell-muted">{etab.telephone || '—'}</td>
-                        {/* <td><StatusBadge actif={actif} /></td> */}
+                        <td><StatusBadge actif={actif} /></td>
                         <td>
                           <div className="yk-actions-cell">
                             <ActionButton icon="edit" label="Modifier" onClick={() => setEditionEtab({ id: etab.id, nom: etab.nom, code_unique: etab.code_unique, adresse: etab.adresse || '', telephone: etab.telephone || '' })} />
-                            {/* <ActionButton icon={actif ? 'block' : 'check_circle'} label={actif ? 'Désactiver' : 'Réactiver'} tone={actif ? 'warn' : 'default'} onClick={() => handleToggleEtabStatut(etab)} /> */}
+                            <ActionButton icon={actif ? 'block' : 'check_circle'} label={actif ? 'Désactiver' : 'Réactiver'} tone={actif ? 'warn' : 'default'} onClick={() => handleToggleEtabStatut(etab)} />
                             <ActionButton icon="delete" label="Supprimer" tone="danger" onClick={() => handleSupprimerEtab(etab)} />
                           </div>
                         </td>
