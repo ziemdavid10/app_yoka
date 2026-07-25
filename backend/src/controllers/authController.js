@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { enregistrerAudit } = require('../utils/auditLogger');
 
-// 1. INSCRIPTION (Création d'un utilisateur / Admin / Superadmin)
+// 1. INSCRIPTION
 exports.register = async (req, res) => {
   const { identifiant, mot_de_passe, nom, prenom, code_etablissement, nom_role } = req.body;
 
@@ -45,7 +45,8 @@ exports.register = async (req, res) => {
 
     return res.status(201).json({ message: "Utilisateur créé avec succès !" });
   } catch (error) {
-    if (error.code === 'ER_DUP_ENTRY') {
+    const isDuplicate = error.code === 'ER_DUP_ENTRY' || error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.includes('UNIQUE'));
+    if (isDuplicate) {
       return res.status(400).json({ error: "Cet identifiant est déjà attribué à un autre utilisateur." });
     }
     console.error("Erreur lors de la création du compte :", error);
@@ -62,15 +63,13 @@ exports.login = async (req, res) => {
   }
 
   try {
-    // On joint etablissements pour pouvoir bloquer la connexion si le compte
-    // OU l'établissement rattaché a été désactivé (aucun des deux n'était
-    // vérifié auparavant : la désactivation n'avait donc aucun effet réel).
     const [users] = await db.execute(`
       SELECT u.*, e.statut AS etablissement_statut, e.nom AS etablissement_nom
       FROM utilisateurs u
       LEFT JOIN etablissements e ON u.etablissement_id = e.id
       WHERE u.identifiant = ?
     `, [identifiant]);
+
     if (users.length === 0) {
       return res.status(401).json({ error: "Identifiants ou code établissement incorrects." });
     }
@@ -81,14 +80,11 @@ exports.login = async (req, res) => {
       return res.status(401).json({ error: "Identifiants ou code établissement incorrects." });
     }
 
-    // Compte désactivé : on bloque avant de délivrer un token.
     if (Number(user.statut) === 0) {
       await enregistrerAudit(req, 'CONNEXION_REFUSEE_COMPTE_DESACTIVE', `Tentative de connexion sur le compte désactivé : ${identifiant}`);
       return res.status(403).json({ error: "Ce compte a été désactivé. Contactez votre administrateur." });
     }
 
-    // Établissement désactivé : bloque tous ses admins, même si leur compte
-    // individuel est encore marqué actif.
     if (user.etablissement_id && Number(user.etablissement_statut) === 0) {
       await enregistrerAudit(req, 'CONNEXION_REFUSEE_ETABLISSEMENT_DESACTIVE', `Tentative de connexion pour un établissement désactivé (${user.etablissement_nom}) : ${identifiant}`);
       return res.status(403).json({ error: "L'établissement rattaché à ce compte est désactivé." });
@@ -104,7 +100,7 @@ exports.login = async (req, res) => {
 
     const token = jwt.sign(
       { id: user.id, etablissement_id: user.etablissement_id, roles: listeRoles },
-      process.env.JWT_SECRET,
+      process.env.JWT_SECRET || 'secret_key',
       { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
     );
 
@@ -129,7 +125,7 @@ exports.login = async (req, res) => {
   }
 };
 
-// 3. RECUPERATION DES ADMNISTRATEURS (Version Corrigée Multi-tables)
+// 3. RECUPERATION DES ADMNISTRATEURS
 exports.listerTousLesAdmins = async (req, res) => {
   try {
     const query = `
@@ -187,7 +183,7 @@ exports.modifierAdmin = async (req, res) => {
 // 5. Activer / Désactiver un Administrateur
 exports.changerStatutAdmin = async (req, res) => {
   const { id } = req.params;
-  const { actif } = req.body; // true/false — même contrat que changerStatutEtablissement
+  const { actif } = req.body;
 
   if (actif === undefined) {
     return res.status(400).json({ error: "Le statut (actif/inactif) est requis." });
@@ -239,7 +235,6 @@ exports.supprimerAdmin = async (req, res) => {
   const { id } = req.params;
 
   try {
-    // Supprimer les rôles rattachés puis l'utilisateur
     await db.execute('DELETE FROM utilisateur_roles WHERE utilisateur_id = ?', [id]);
     const [result] = await db.execute('DELETE FROM utilisateurs WHERE id = ?', [id]);
 

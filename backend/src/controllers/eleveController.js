@@ -12,7 +12,6 @@ exports.creerEleve = async (req, res) => {
   const { nom, prenom, date_naissance, genre } = req.body;
   const etablissement_id = req.user.etablissement_id;
 
-  // Validation stricte des données obligatoires
   if (!nom || !nom.trim() || !prenom || !prenom.trim() || !date_naissance || !genre) {
     return res.status(400).json({ error: "Tous les champs (nom, prénom, date de naissance, genre) sont obligatoires." });
   }
@@ -21,7 +20,6 @@ exports.creerEleve = async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    // Récupération sécurisée du code unique de l'établissement rattaché à l'utilisateur
     const [etabRows] = await connection.execute(
       'SELECT code_unique FROM etablissements WHERE id = ?', 
       [etablissement_id]
@@ -33,17 +31,13 @@ exports.creerEleve = async (req, res) => {
     }
 
     const codeEtablissement = etabRows[0].code_unique;
-
-    // Génération asynchrone et sécurisée du matricule automatique (2 paramètres requis)
     const matriculeAutomatique = await genererMatricule(etablissement_id, codeEtablissement);
 
-    // Insertion unifiée
     const [result] = await connection.execute(
       'INSERT INTO eleves (nom, prenom, date_naissance, genre, matricule, etablissement_id) VALUES (?, ?, ?, ?, ?, ?)',
       [nom.trim().toUpperCase(), prenom.trim(), date_naissance, genre.toUpperCase(), matriculeAutomatique, etablissement_id]
     );
 
-    // Trace d'audit persistée
     await enregistrerAudit(req, 'CREATION_ELEVE', `Création de l'élève : ${nom.toUpperCase()} ${prenom} (Matricule: ${matriculeAutomatique})`);
 
     await connection.commit();
@@ -56,13 +50,14 @@ exports.creerEleve = async (req, res) => {
 
   } catch (error) {
     await connection.rollback();
-    if (error.code === 'ER_DUP_ENTRY') {
+    const isDuplicate = error.code === 'ER_DUP_ENTRY' || error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.includes('UNIQUE'));
+    if (isDuplicate) {
       return res.status(400).json({ error: "Une collision de matricule a été détectée. Veuillez réessayer." });
     }
     console.error("Erreur lors de l'enregistrement de l'élève :", error);
     return res.status(500).json({ error: "Une erreur interne est survenue lors de l'enregistrement." });
   } finally {
-    connection.release();
+    if (connection.release) connection.release();
   }
 };
 
@@ -77,7 +72,6 @@ exports.getEleves = async (req, res) => {
     let query = 'SELECT * FROM eleves';
     let params = [];
 
-    // Cloisonnement multi-tenant hermétique
     if (!isSuperAdmin) {
       query += ' WHERE etablissement_id = ?';
       params.push(req.user.etablissement_id);
@@ -86,7 +80,7 @@ exports.getEleves = async (req, res) => {
       params.push(req.query.etablissement_id);
     }
 
-    query += ' ORDER BY id DESC'; // Utilisation d'un tri compatible avec l'index primaire d'origine
+    query += ' ORDER BY id DESC';
 
     const [rows] = await db.execute(query, params);
     return res.status(200).json(rows);
@@ -144,14 +138,12 @@ exports.importerEleves = async (req, res) => {
 
   const connection = await db.getConnection();
   try {
-    // Récupérer le code établissement une seule fois
     const [etabRows] = await connection.execute(
       'SELECT code_unique FROM etablissements WHERE id = ?', [etablissement_id]
     );
     if (etabRows.length === 0) return res.status(404).json({ error: "Établissement introuvable." });
     const codeEtablissement = etabRows[0].code_unique;
 
-    // Lire le fichier Excel depuis le buffer mémoire
     const workbook = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
@@ -169,7 +161,6 @@ exports.importerEleves = async (req, res) => {
       const prenom = (row['prenom'] || row['PRENOM'] || row['Prénom'] || row['prenom'] || '').toString().trim();
       const genre = (row['genre'] || row['GENRE'] || row['Genre'] || 'M').toString().trim().toUpperCase();
 
-      // Normaliser la date de naissance (Excel peut retourner un objet Date ou une chaîne)
       let date_naissance = row['date_naissance'] || row['DATE_NAISSANCE'] || row['Date de naissance'] || '';
       if (date_naissance instanceof Date) {
         date_naissance = date_naissance.toISOString().split('T')[0];
@@ -207,6 +198,6 @@ exports.importerEleves = async (req, res) => {
     console.error('Erreur import Excel:', error);
     return res.status(500).json({ error: "Erreur lors de l'import du fichier." });
   } finally {
-    connection.release();
+    if (connection.release) connection.release();
   }
 };

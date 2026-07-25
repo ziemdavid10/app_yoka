@@ -78,20 +78,24 @@ exports.modifierEtablissement = async (req, res) => {
 // 4. Activer / Désactiver un établissement
 exports.changerStatutEtablissement = async (req, res) => {
   const { id } = req.params;
-  const { actif } = req.body; // true ou false
+  const { actif } = req.body;
+
   if (actif === undefined) {
     return res.status(400).json({
       error: "Le statut (actif/inactif) est requis."
     });
   }
+
+  // 🛡️ SÉCURITÉ : Interdiction de désactiver l'établissement principal (ID = 1)
+  if (parseInt(id, 10) === 1 && !actif) {
+    return res.status(403).json({
+      error: "L'établissement principal par défaut ne peut pas être désactivé."
+    });
+  }
+
   try {
     const statut = actif ? 1 : 0;
 
-    // On vérifie l'existence séparément de la mise à jour : par défaut,
-    // MySQL ne compte dans affectedRows que les lignes dont la valeur a
-    // réellement changé, pas celles simplement trouvées par le WHERE.
-    // Sans cette vérification préalable, (ré)activer un établissement déjà
-    // dans l'état demandé renvoyait à tort "Établissement introuvable".
     const [existant] = await db.execute('SELECT id FROM etablissements WHERE id = ?', [id]);
     if (existant.length === 0) {
       return res.status(404).json({
@@ -121,9 +125,17 @@ exports.changerStatutEtablissement = async (req, res) => {
     });
   }
 };
+
 // 5. Supprimer un établissement
 exports.supprimerEtablissement = async (req, res) => {
   const { id } = req.params;
+
+  // 🛡️ SÉCURITÉ : Interdiction de supprimer l'établissement principal (ID = 1)
+  if (parseInt(id, 10) === 1) {
+    return res.status(403).json({
+      error: "L'établissement principal par défaut ne peut pas être supprimé."
+    });
+  }
 
   try {
     const [result] = await db.execute('DELETE FROM etablissements WHERE id = ?', [id]);
@@ -136,7 +148,8 @@ exports.supprimerEtablissement = async (req, res) => {
     return res.status(200).json({ message: "Établissement supprimé avec succès." });
   } catch (error) {
     console.error("Erreur supprimerEtablissement :", error);
-    if (error.code === 'ER_ROW_IS_REFERENCED_2') {
+    const isForeignKey = error.code === 'ER_ROW_IS_REFERENCED_2' || error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.includes('FOREIGN KEY'));
+    if (isForeignKey) {
       return res.status(400).json({ error: "Impossible de supprimer cet établissement car des utilisateurs ou données y sont rattachés." });
     }
     return res.status(500).json({ error: "Erreur lors de la suppression de l'établissement." });

@@ -15,14 +15,13 @@ exports.creerClasse = async (req, res) => {
   }
   const scolarite = parseFloat(frais_scolarite);
   if (isNaN(scolarite) || scolarite <= 0) {
-    return res.status(400).json({ error: "Les frais de scolarité doivent être strictement positifs." });
+    return res.status(400).json({ error: "Les frais de scolarité doivent être strictly positifs." });
   }
 
   const estExamen = est_classe_examen ? 1 : 0;
   const fraisExamen = estExamen ? (parseFloat(frais_examen) || 0) : 0;
   const fraisApe = parseFloat(frais_ape) || 0;
 
-  // Un frais d'examen strictement positif est exigé quand la classe est déclarée « classe d'examen »
   if (estExamen && fraisExamen <= 0) {
     return res.status(400).json({ error: "Une classe d'examen doit définir des frais d'examen strictement positifs." });
   }
@@ -43,7 +42,7 @@ exports.creerClasse = async (req, res) => {
   }
 };
 
-// 2. Récupérer toutes les classes (Cloisonné multi-tenant)
+// 2. Récupérer toutes les classes
 exports.getClasses = async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: "Action non autorisée. Profil utilisateur manquant." });
@@ -72,7 +71,7 @@ exports.getClasses = async (req, res) => {
   }
 };
 
-// 2b. Modifier une classe  (route PUT /:id — était appelée par le frontend mais absente du routeur)
+// 2b. Modifier une classe
 exports.updateClasse = async (req, res) => {
   if (!req.user) return res.status(401).json({ error: "Action non autorisée." });
 
@@ -108,7 +107,7 @@ exports.updateClasse = async (req, res) => {
   }
 };
 
-// 2c. Supprimer une classe  (route DELETE /:id — était appelée mais absente du routeur)
+// 2c. Supprimer une classe
 exports.deleteClasse = async (req, res) => {
   if (!req.user) return res.status(401).json({ error: "Action non autorisée." });
 
@@ -116,7 +115,6 @@ exports.deleteClasse = async (req, res) => {
   const etablissement_id = req.user.etablissement_id;
 
   try {
-    // Refuser la suppression si des inscriptions existent (intégrité référentielle)
     const [insc] = await db.execute(
       'SELECT COUNT(*) AS n FROM inscriptions WHERE classe_id = ? AND etablissement_id = ?',
       [id, etablissement_id]
@@ -140,7 +138,7 @@ exports.deleteClasse = async (req, res) => {
   }
 };
 
-// 3. Enregistrer ou mettre à jour les tranches d'une classe (Transactionnel)
+// 3. Enregistrer ou mettre à jour les tranches (Adapté pour SQLite)
 exports.saveTranches = async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: "Action non autorisée. Profil utilisateur manquant." });
@@ -154,8 +152,6 @@ exports.saveTranches = async (req, res) => {
     return res.status(400).json({ error: "Données invalides. L'ID de classe et la liste des tranches sont requis." });
   }
 
-  // --- Contexte de nommage : établissement + année scolaire + classe -------------
-  // Récupère le code établissement, le nom de la classe et l'année scolaire active
   const [ctxRows] = await db.execute(
      `SELECT c.nom AS classe_nom, c.frais_scolarite, et.code_unique, et.nom AS etab_nom,
             (SELECT libelle FROM annees_scolaires WHERE statut = 1 ORDER BY id DESC LIMIT 1) AS annee_active
@@ -164,13 +160,15 @@ exports.saveTranches = async (req, res) => {
       WHERE c.id = ? AND c.etablissement_id = ?`,
     [classe_id, etablissement_id]
   );
+
   if (ctxRows.length === 0) {
     return res.status(404).json({ error: "Classe introuvable ou hors de votre établissement." });
   }
+
   const ctx = ctxRows[0];
   const annee = ctx.annee_active || String(new Date().getFullYear()) + '-' + String(new Date().getFullYear() + 1);
   const prefixe = `${ctx.code_unique || ctx.etab_nom} · ${annee} · ${ctx.classe_nom}`;
-  // La somme des tranches doit égaler le total du versement (frais de scolarité)
+
   if (tranches.length > 0) {
     const somme = tranches.reduce((s, t) => s + (parseFloat(t.montant) || 0), 0);
     const total = parseFloat(ctx.frais_scolarite) || 0;
@@ -181,7 +179,6 @@ exports.saveTranches = async (req, res) => {
     }
   }
 
-  // --- EXIGENCE 1 : le montant d'une tranche ne doit JAMAIS être nul/zéro --------
   for (let i = 0; i < tranches.length; i++) {
     const m = parseFloat(tranches[i].montant);
     if (isNaN(m) || m <= 0) {
@@ -202,24 +199,17 @@ exports.saveTranches = async (req, res) => {
       [classe_id, etablissement_id]
     );
 
-    if (tranches.length > 0) {
-      const insertQuery = `
-        INSERT INTO classe_tranches (classe_id, etablissement_id, nom, montant, date_limite)
-        VALUES ?
-      `;
-      const values = tranches.map((t, index) => {
-        const brut = (t.nom || t.libelle || t.label || `Tranche ${index + 1}`).toString().trim();
-        // EXIGENCE 5 : nom identifiable = établissement · année scolaire · classe · libellé de la tranche
-        const nomComplet = `${prefixe} · ${brut}`;
-        return [
-          classe_id,
-          etablissement_id,
-          nomComplet,
-          parseFloat(t.montant),
-          t.date_limite || null
-        ];
-      });
-      await connection.query(insertQuery, [values]);
+    // Insertion répétée compatible SQLite (au lieu de la syntaxe MySQL VALUES ?)
+    for (let index = 0; index < tranches.length; index++) {
+      const t = tranches[index];
+      const brut = (t.nom || t.libelle || t.label || `Tranche ${index + 1}`).toString().trim();
+      const nomComplet = `${prefixe} · ${brut}`;
+
+      await connection.execute(
+        `INSERT INTO classe_tranches (classe_id, etablissement_id, nom, montant, date_limite)
+         VALUES (?, ?, ?, ?, ?)`,
+        [classe_id, etablissement_id, nomComplet, parseFloat(t.montant), t.date_limite || null]
+      );
     }
 
     if (useTransaction) await connection.commit();
@@ -236,7 +226,7 @@ exports.saveTranches = async (req, res) => {
   }
 };
 
-// 4. Récupérer les tranches configurées pour une classe spécifique
+// 4. Récupérer les tranches configurées (Adapté pour strftime)
 exports.getTranches = async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: "Action non autorisée." });
@@ -250,10 +240,9 @@ exports.getTranches = async (req, res) => {
   }
 
   try {
-    // FIX incohérence de champ : le frontend lit `label` -> on l'expose en plus de `nom`.
     const query = `
       SELECT id, nom, nom AS label, montant,
-             DATE_FORMAT(date_limite, '%Y-%m-%d') AS date_limite
+             strftime('%Y-%m-%d', date_limite) AS date_limite
         FROM classe_tranches
        WHERE classe_id = ? AND etablissement_id = ?
        ORDER BY id ASC

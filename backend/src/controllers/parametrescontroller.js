@@ -1,13 +1,8 @@
 const db = require('../config/db');
 
-// ---------------------------------------------------------------------------
-// Valeurs autorisées, alignées sur les <select> du composant React
-// (onglet "Configuration" de SuperAdminDashboard.jsx).
-// ---------------------------------------------------------------------------
 const RETENTIONS_VALIDES = [90, 180, 365, 730];
 const FREQUENCES_VALIDES = ['quotidienne', 'hebdomadaire'];
 
-// Transforme la ligne SQL (snake_case) vers la forme attendue par le frontend (camelCase)
 const mapVersFrontend = (row) => ({
   exigerChangementMdp: Boolean(row.exiger_changement_mdp),
   dureeSessionHeures: row.duree_session_heures,
@@ -59,8 +54,6 @@ exports.getParametres = async (req, res) => {
   try {
     let [rows] = await db.execute('SELECT * FROM parametres_systeme WHERE id = 1 LIMIT 1');
 
-    // Amorce défensive : si la ligne singleton n'existe pas encore (migration non jouée
-    // ou table vidée), on la recrée avec les valeurs par défaut plutôt que d'échouer.
     if (!rows.length) {
       await db.execute('INSERT INTO parametres_systeme (id) VALUES (1)');
       [rows] = await db.execute('SELECT * FROM parametres_systeme WHERE id = 1 LIMIT 1');
@@ -73,7 +66,7 @@ exports.getParametres = async (req, res) => {
   }
 };
 
-// PUT /api/parametres
+// PUT /api/parametres (Adapté pour CURRENT_TIMESTAMP au lieu de NOW())
 exports.updateParametres = async (req, res) => {
   const erreurs = validerParametres(req.body);
   if (erreurs.length) {
@@ -97,7 +90,7 @@ exports.updateParametres = async (req, res) => {
          frequence_sauvegarde    = ?,
          alerte_echec_connexion  = ?,
          modifie_par             = ?,
-         modifie_le              = NOW()
+         modifie_le              = CURRENT_TIMESTAMP
        WHERE id = 1`,
       [
         exigerChangementMdp ? 1 : 0,
@@ -110,15 +103,12 @@ exports.updateParametres = async (req, res) => {
       ]
     );
 
-    // La modification de la configuration globale est une action sensible :
-    // elle est journalisée comme les autres actions d'administration.
     if (utilisateurId) {
       await db.execute(
         `INSERT INTO audit_logs (utilisateur_id, etablissement_id, action, details, ip_address)
          VALUES (?, NULL, 'MODIFICATION_PARAMETRES_SYSTEME', ?, ?)`,
         [utilisateurId, JSON.stringify(req.body), req.ip]
       ).catch((err) => {
-        // On ne bloque jamais la sauvegarde des paramètres si la journalisation échoue.
         console.error("Impossible d'enregistrer la piste d'audit pour cette modification :", err);
       });
     }

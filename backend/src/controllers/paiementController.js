@@ -2,16 +2,14 @@ const crypto = require('crypto');
 const db = require('../config/db');
 const { enregistrerAudit } = require('../utils/auditLogger');
 
-// Types de versement autorisés (EXIGENCE 3)
 const TYPES_GLOBAUX = ['SCOLARITE', 'APE', 'EXAMEN'];
 
-// 1. Enregistrer un versement (Transactionnel + Isolation des caisses)
+// 1. Enregistrer un versement
 exports.savePaiement = async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: "Profil utilisateur manquant." });
   }
 
-  // categorie = SCOLARITE | APE | EXAMEN  ;  type_versement = libellé de tranche (pour la scolarité échelonnée)
   const { inscription_id, montant, type_versement, categorie, mode_paiement, reference_banque } = req.body;
   const versement = parseFloat(montant);
   const etablissement_id = req.user.etablissement_id;
@@ -23,7 +21,6 @@ exports.savePaiement = async (req, res) => {
   if (!TYPES_GLOBAUX.includes(cat)) {
     return res.status(400).json({ error: `Catégorie de versement invalide. Attendu : ${TYPES_GLOBAUX.join(', ')}.` });
   }
-  // EXIGENCE 1 : un montant nul/zéro/négatif est rejeté
   if (isNaN(versement) || versement <= 0) {
     return res.status(400).json({ error: "Le montant saisi doit être un nombre strictement positif supérieur à zéro." });
   }
@@ -32,7 +29,6 @@ exports.savePaiement = async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    // A. SÉCURITÉ MULTI-TENANT + lecture des frais par catégorie
     const [verifRows] = await connection.execute(`
       SELECT i.id, c.id AS classe_id, c.frais_scolarite, c.frais_ape, c.frais_examen, c.est_classe_examen,
              e.nom, e.prenom, c.nom AS classe_nom
@@ -49,13 +45,11 @@ exports.savePaiement = async (req, res) => {
 
     const info = verifRows[0];
 
-    // EXIGENCE 3 : les frais d'examen ne s'appliquent qu'aux classes d'examen
     if (cat === 'EXAMEN' && !info.est_classe_examen) {
       await connection.rollback();
       return res.status(400).json({ error: "Cette classe n'est pas une classe d'examen : aucun frais d'examen n'est dû." });
     }
 
-    // Montant total attendu pour la catégorie visée
     const attenduParCategorie = {
       SCOLARITE: parseFloat(info.frais_scolarite) || 0,
       APE: parseFloat(info.frais_ape) || 0,
@@ -63,7 +57,6 @@ exports.savePaiement = async (req, res) => {
     };
     const totalAttendu = attenduParCategorie[cat];
 
-    // Déjà payé POUR CETTE CATÉGORIE uniquement (cloisonnement des enveloppes)
     const [dejaRows] = await connection.execute(
       `SELECT IFNULL(SUM(montant), 0) AS total
          FROM paiements
@@ -73,7 +66,6 @@ exports.savePaiement = async (req, res) => {
     const totalDejaPaye = parseFloat(dejaRows[0].total) || 0;
     const resteAPayer = totalAttendu - totalDejaPaye;
 
-    // B. Protection contre le surpaiement (par catégorie)
     if (resteAPayer <= 0) {
       await connection.rollback();
       return res.status(400).json({ error: `Le poste « ${cat} » est déjà entièrement soldé.` });
@@ -85,7 +77,6 @@ exports.savePaiement = async (req, res) => {
       });
     }
 
-    // C. EXIGENCE 2 & 4 : blocage séquentiel des TRANCHES (uniquement pour la SCOLARITÉ)
     let trancheCible = type_versement || null;
     if (cat === 'SCOLARITE') {
       const [tranchesRows] = await connection.execute(`
@@ -96,7 +87,6 @@ exports.savePaiement = async (req, res) => {
       `, [info.classe_id, etablissement_id]);
 
       if (tranchesRows.length > 0) {
-        // Somme déjà réglée par tranche
         const [parTranche] = await connection.execute(
           `SELECT type_versement, IFNULL(SUM(montant),0) AS paye
              FROM paiements
@@ -107,7 +97,6 @@ exports.savePaiement = async (req, res) => {
         const payeParLabel = {};
         parTranche.forEach(r => { payeParLabel[r.type_versement] = parseFloat(r.paye) || 0; });
 
-        // Première tranche NON entièrement soldée (comparaison sur le solde réel)
         const prochaine = tranchesRows.find(t => (payeParLabel[t.label] || 0) < parseFloat(t.montant));
 
         if (!prochaine) {
@@ -115,7 +104,6 @@ exports.savePaiement = async (req, res) => {
           return res.status(400).json({ error: "Toutes les tranches de scolarité sont déjà soldées." });
         }
 
-        // On force le versement sur la tranche courante non soldée
         if (type_versement && type_versement !== prochaine.label) {
           await connection.rollback();
           return res.status(400).json({
@@ -124,7 +112,6 @@ exports.savePaiement = async (req, res) => {
         }
         trancheCible = prochaine.label;
 
-        // Le versement ne peut dépasser le solde restant de la tranche courante
         const resteTranche = parseFloat(prochaine.montant) - (payeParLabel[prochaine.label] || 0);
         if (versement > resteTranche) {
           await connection.rollback();
@@ -135,7 +122,6 @@ exports.savePaiement = async (req, res) => {
       }
     }
 
-    // D. Génération de la référence de reçu unique
     const [etabRows] = await connection.execute('SELECT code_unique FROM etablissements WHERE id = ?', [etablissement_id]);
     const code_etablissement = etabRows.length > 0 ? etabRows[0].code_unique : 'GEN';
     const codeEtabPropre = (code_etablissement || 'GEN').replace(/[^a-zA-Z0-9]/g, '').toUpperCase().substring(0, 8);
@@ -147,7 +133,6 @@ exports.savePaiement = async (req, res) => {
     const suffixeAleatoire = crypto.randomBytes(3).toString('hex').toUpperCase().slice(0, 5);
     const numero_recu = `REC-${codeEtabPropre}-${aa}${mm}${jj}-${suffixeAleatoire}`;
 
-    // E. Insertion du paiement (catégorie + tranche)
     const [result] = await connection.execute(`
       INSERT INTO paiements
         (inscription_id, montant, categorie, type_versement, mode_paiement, reference_banque, numero_recu, etablissement_id)
@@ -180,13 +165,11 @@ exports.savePaiement = async (req, res) => {
     console.error("Erreur critique d'enregistrement de versement :", error);
     return res.status(500).json({ error: error.sqlMessage || error.message, code: error.code });
   } finally {
-    connection.release();
+    if (connection.release) connection.release();
   }
 };
 
-
-
-// 2. Listing sécurisé des paiements encaissés
+// 2. Listing des paiements
 exports.getPaiements = async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: "Profil utilisateur absent." });
@@ -224,7 +207,7 @@ exports.getPaiements = async (req, res) => {
   }
 };
 
-// 3. KPI Financiers cloisonnés
+// 3. KPI Financiers
 exports.getStatsFinancieres = async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: "Profil utilisateur absent." });
@@ -245,22 +228,19 @@ exports.getStatsFinancieres = async (req, res) => {
     if (anneeId) { whereI.push('i.annee_id = ?'); paramsI.push(anneeId); }
     const condI = whereI.length ? ' WHERE ' + whereI.join(' AND ') : '';
 
-    // Attendu = scolarité + APE + examen (si classe d'examen)
     const [attenduRows] = await db.execute(`
-      SELECT IFNULL(SUM(c.frais_scolarite + c.frais_ape + (CASE WHEN c.est_classe_examen THEN c.frais_examen ELSE 0 END)), 0) AS total_attendu
+      SELECT IFNULL(SUM(c.frais_scolarite + c.frais_ape + (CASE WHEN c.est_classe_examen = 1 THEN c.frais_examen ELSE 0 END)), 0) AS total_attendu
       FROM inscriptions i
       INNER JOIN classes c ON i.classe_id = c.id
       ${condI}
     `, paramsI);
 
-    // Encaissé via l'inscription (pour filtrer par année)
     const [encaisseRows] = await db.execute(`
       SELECT IFNULL(SUM(p.montant), 0) AS total_encaisse
       FROM paiements p INNER JOIN inscriptions i ON p.inscription_id = i.id
       ${condI}
     `, paramsI);
 
-    // Dépenses : pas de lien année → filtre établissement seul
     let condDep = ''; const paramsDep = [];
     if (!isSuperAdmin || req.query.etablissement_id) { condDep = ' WHERE etablissement_id = ? '; paramsDep.push(targetEtablissementId); }
     const [depenseRows] = await db.execute(`
@@ -290,7 +270,7 @@ exports.getStatsFinancieres = async (req, res) => {
   }
 };
 
-// 4. Extraction dynamique des débiteurs insolvables
+// 4. Extraction des débiteurs
 exports.getDebiteurs = async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: "Profil utilisateur absent." });
@@ -302,9 +282,9 @@ exports.getDebiteurs = async (req, res) => {
   try {
     let query = `
       SELECT i.id AS inscription_id, e.matricule, e.nom, e.prenom, c.nom AS classe_nom,
-             (c.frais_scolarite + c.frais_ape + (CASE WHEN c.est_classe_examen THEN c.frais_examen ELSE 0 END)) AS total_scolarite,
+             (c.frais_scolarite + c.frais_ape + (CASE WHEN c.est_classe_examen = 1 THEN c.frais_examen ELSE 0 END)) AS total_scolarite,
              IFNULL(SUM(p.montant), 0) AS total_paye,
-             ((c.frais_scolarite + c.frais_ape + (CASE WHEN c.est_classe_examen THEN c.frais_examen ELSE 0 END)) - IFNULL(SUM(p.montant), 0)) AS reste_a_payer
+             ((c.frais_scolarite + c.frais_ape + (CASE WHEN c.est_classe_examen = 1 THEN c.frais_examen ELSE 0 END)) - IFNULL(SUM(p.montant), 0)) AS reste_a_payer
       FROM inscriptions i
       INNER JOIN eleves e ON i.eleve_id = e.id
       INNER JOIN classes c ON i.classe_id = c.id
@@ -332,7 +312,7 @@ exports.getDebiteurs = async (req, res) => {
   }
 };
 
-// 5. Enregistrer une dépense opérationnelle (Caisse de l'école)
+// 5. Enregistrer une dépense
 exports.enregistrerDepense = async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: "Profil utilisateur absent." });
@@ -381,7 +361,7 @@ exports.enregistrerDepense = async (req, res) => {
   }
 };
 
-// 6. Historique filtré des dépenses opérationnelles
+// 6. Historique des dépenses
 exports.getDepenses = async (req, res) => {
   if (!req.user) return res.status(401).json({ error: "Profil de l'agent inexistant." });
 
@@ -504,8 +484,7 @@ exports.deleteDepense = async (req, res) => {
   }
 };
 
-
-// 11. Liste des années scolaires (pour les sélecteurs d'états)
+// 11. Liste des années scolaires
 exports.getAnneesScolaires = async (req, res) => {
   if (!req.user) return res.status(401).json({ error: "Profil utilisateur absent." });
   try {
@@ -519,11 +498,10 @@ exports.getAnneesScolaires = async (req, res) => {
   }
 };
 
-// Bloc SELECT commun de ventilation dû / payé par catégorie
 const SELECT_VENTILATION = `
   c.frais_scolarite AS du_scolarite,
   c.frais_ape AS du_ape,
-  (CASE WHEN c.est_classe_examen THEN c.frais_examen ELSE 0 END) AS du_examen,
+  (CASE WHEN c.est_classe_examen = 1 THEN c.frais_examen ELSE 0 END) AS du_examen,
   IFNULL(ps.paye, 0) AS paye_scolarite,
   IFNULL(pa.paye, 0) AS paye_ape,
   IFNULL(pe.paye, 0) AS paye_examen
@@ -545,7 +523,7 @@ function filtreEtat(req) {
   return { cond: where.length ? ' WHERE ' + where.join(' AND ') : '', params };
 }
 
-// 12. État financier PAR ÉLÈVE (par année scolaire)
+// 12. État financier PAR ÉLÈVE
 exports.getEtatParEleve = async (req, res) => {
   if (!req.user) return res.status(401).json({ error: "Profil utilisateur absent." });
   try {
@@ -566,7 +544,7 @@ exports.getEtatParEleve = async (req, res) => {
   }
 };
 
-// 13. État financier PAR CLASSE (par année scolaire)
+// 13. État financier PAR CLASSE
 exports.getEtatParClasse = async (req, res) => {
   if (!req.user) return res.status(401).json({ error: "Profil utilisateur absent." });
   try {
@@ -576,7 +554,7 @@ exports.getEtatParClasse = async (req, res) => {
              COUNT(DISTINCT i.id) AS nb_eleves,
              SUM(c.frais_scolarite) AS du_scolarite,
              SUM(c.frais_ape) AS du_ape,
-             SUM(CASE WHEN c.est_classe_examen THEN c.frais_examen ELSE 0 END) AS du_examen,
+             SUM(CASE WHEN c.est_classe_examen = 1 THEN c.frais_examen ELSE 0 END) AS du_examen,
              SUM(IFNULL(ps.paye, 0)) AS paye_scolarite,
              SUM(IFNULL(pa.paye, 0)) AS paye_ape,
              SUM(IFNULL(pe.paye, 0)) AS paye_examen

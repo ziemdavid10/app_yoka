@@ -1,7 +1,7 @@
 const db = require('../config/db');
 
 exports.getJournalGlobal = async (req, res) => {
-  const { etablissement_id } = req.query; // Optionnel : pour filtrer sur un campus précis
+  const { etablissement_id } = req.query;
   
   try {
     let sql = `
@@ -18,7 +18,7 @@ exports.getJournalGlobal = async (req, res) => {
       params.push(etablissement_id);
     }
     
-    sql += ` ORDER BY a.cree_le DESC LIMIT 200`; // Limite de performance adaptative
+    sql += ` ORDER BY a.cree_le DESC LIMIT 200`;
 
     const [rows] = await db.execute(sql, params);
     return res.status(200).json(rows);

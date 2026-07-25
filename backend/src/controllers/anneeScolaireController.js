@@ -13,12 +13,8 @@ exports.listerAnneesScolaires = async (req, res) => {
 };
 
 // 2. Créer une nouvelle année scolaire
-// ⚠️ Nécessite la migration : ALTER TABLE annees_scolaires
-//     ADD COLUMN date_debut DATE NULL, ADD COLUMN date_fin DATE NULL;
-// (le frontend collecte déjà ces deux champs en obligatoire, ils étaient
-//  jusqu'ici silencieusement ignorés côté serveur)
 exports.creerAnneeScolaire = async (req, res) => {
-  const { libelle, date_debut, date_fin } = req.body; // Ex: "2025-2026"
+  const { libelle, date_debut, date_fin } = req.body;
 
   if (!libelle) {
     return res.status(400).json({ error: "Le libellé de l'année scolaire est requis." });
@@ -33,7 +29,8 @@ exports.creerAnneeScolaire = async (req, res) => {
     await enregistrerAudit(req, 'CREATION_ANNEE_SCOLAIRE', `Création de l'année scolaire : ${libelle}`);
     return res.status(201).json({ message: "Année scolaire créée avec succès.", id: result.insertId });
   } catch (error) {
-    if (error.code === 'ER_DUP_ENTRY') {
+    const isDuplicate = error.code === 'ER_DUP_ENTRY' || error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.includes('UNIQUE'));
+    if (isDuplicate) {
       return res.status(400).json({ error: "Cette année scolaire existe déjà." });
     }
     console.error("Erreur creerAnneeScolaire :", error);
@@ -41,7 +38,7 @@ exports.creerAnneeScolaire = async (req, res) => {
   }
 };
 
-// 3. Activer une année scolaire (RÈGLE STRICTE : MAX 1 ANNÉE ACTIVE VIA TRANSACTION)
+// 3. Activer une année scolaire (MAX 1 ANNÉE ACTIVE VIA TRANSACTION)
 exports.activerAnneeScolaire = async (req, res) => {
   const { id } = req.params;
 
@@ -49,10 +46,8 @@ exports.activerAnneeScolaire = async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    // Étape A: Désactiver TOUTES les années scolaires du système
     await connection.execute('UPDATE annees_scolaires SET statut = 0');
 
-    // Étape B: Activer EXCLUSIVEMENT l'année sélectionnée
     const [result] = await connection.execute(
       'UPDATE annees_scolaires SET statut = 1 WHERE id = ?',
       [id]
@@ -72,7 +67,7 @@ exports.activerAnneeScolaire = async (req, res) => {
     console.error("Erreur activerAnneeScolaire :", error);
     return res.status(500).json({ error: "Erreur serveur lors de l'activation de l'année scolaire." });
   } finally {
-    connection.release();
+    if (connection.release) connection.release();
   }
 };
 

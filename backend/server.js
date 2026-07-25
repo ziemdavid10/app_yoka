@@ -4,9 +4,21 @@ const dotenv = require('dotenv');
 const bcrypt = require('bcryptjs');
 const db = require('./src/config/db');
 const path = require('path');
-const fs = require('fs'); // Détection et lecture sécurisée des fichiers
-const { exec } = require('child_process'); // Lancement du navigateur par défaut
+const fs = require('fs'); 
+const { exec } = require('child_process');
 
+// ------------------------------------------------------------------
+// 0. CAPTURE SÉCURISÉE DES ERREURS GLOBALES (Évite les crashs silencieux)
+// ------------------------------------------------------------------
+process.on('uncaughtException', (err) => {
+  console.error(' Erreur non capturée (uncaughtException) :', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error(' Promesse rejetée non gérée (unhandledRejection) :', reason);
+});
+
+// Import des routes
 const authRoutes = require('./src/routes/authRoutes');
 const eleveRoutes = require('./src/routes/eleveRoutes');
 const classeRoutes = require('./src/routes/classeRoutes');
@@ -36,12 +48,11 @@ app.use('/api/etablissements', etablissementRoutes);
 app.use('/api/annees-scolaires', anneeScolaireRoutes);
 app.use('/api/parametres', parametresRoutes);
 
-// --- GESTION DU FRONTEND REACT ---
-
-// 1. Détection intelligente du chemin 'public' (Virtuel PKG vs Réel)
+// ------------------------------------------------------------------
+// GESTION DU FRONTEND REACT
+// ------------------------------------------------------------------
 let publicPath = path.join(__dirname, 'public');
 
-// Si index.html n'est pas embarqué dans l'exécutable, on cherche dans un dossier 'public' externe à côté du .exe
 if (!fs.existsSync(path.join(publicPath, 'index.html'))) {
   const exeDir = typeof process.pkg !== 'undefined' ? path.dirname(process.execPath) : process.cwd();
   publicPath = path.join(exeDir, 'public');
@@ -49,17 +60,13 @@ if (!fs.existsSync(path.join(publicPath, 'index.html'))) {
 
 console.log(` Dossier Frontend utilisé : ${publicPath}`);
 
-// 2. Servir les fichiers statiques (JS, CSS, images)
 app.use(express.static(publicPath));
 
-/// 3. Redirection SPA React (Compatible Express v5)
 app.use((req, res, next) => {
-  // 1. Si la requête commence par /api, on laisse passer vers la gestion 404 API
   if (req.path.startsWith('/api')) {
     return res.status(404).json({ error: "Route API introuvable." });
   }
 
-  // 2. Pour toutes les autres routes (ex: /login, /dashboard), on renvoie index.html
   const indexPath = path.join(publicPath, 'index.html');
   if (fs.existsSync(indexPath)) {
     res.sendFile(indexPath);
@@ -67,79 +74,87 @@ app.use((req, res, next) => {
     res.status(404).send(" Erreur : Le fichier index.html du Frontend est introuvable.");
   }
 });
-/**
- * Script d'initialisation sécurisé des comptes administrateurs par défaut
- */
+
+// ------------------------------------------------------------------
+// INITIALISATION DES ADMINS
+// ------------------------------------------------------------------
 async function initialiserAdministrateurs() {
   try {
-    const motDePasseDefaut = 'YokaSecure2026!';
-    const hashedPass = await bcrypt.hash(motDePasseDefaut, 10);
+    // 1. S'assurer que l'établissement principal (ID = 1) est TOUJOURS ACTIF
+    await db.query('UPDATE etablissements SET statut = 1 WHERE id = 1');
 
-    // 1. Initialisation du SUPERADMIN (superyoka)
-    const [superAdminRows] = await db.execute(
-      'SELECT id FROM utilisateurs WHERE identifiant = ?', 
-      ['superyoka']
-    );
+    // 2. Vérifier si superyoka existe
+    const [rows] = await db.query('SELECT id FROM utilisateurs WHERE identifiant = ?', ['superyoka']);
+    let userId;
 
-    if (superAdminRows.length === 0) {
-      const [resUser] = await db.execute(
-        'INSERT INTO utilisateurs (etablissement_id, identifiant, mot_de_passe, nom, prenom) VALUES (?, ?, ?, ?, ?)',
-        [null, 'superyoka', hashedPass, 'Super', 'Yoka']
+    if (!rows || rows.length === 0) {
+      const hash = await bcrypt.hash('Admin@123', 10);
+      
+      const [result] = await db.query(
+        'INSERT INTO utilisateurs (etablissement_id, identifiant, mot_de_passe, nom, statut) VALUES (?, ?, ?, ?, 1)',
+        [1, 'superyoka', hash, 'Super Administrateur']
       );
 
-      const [resRole] = await db.execute('SELECT id FROM roles WHERE nom_role = ?', ['SUPERADMIN']);
-      if (resRole.length > 0) {
-        await db.execute(
-          'INSERT INTO utilisateur_roles (utilisateur_id, role_id) VALUES (?, ?)',
-          [resUser.insertId, resRole[0].id]
-        );
-      }
-      console.log(' Compte [superyoka] créé avec succès.');
+      userId = result.insertId;
+      console.log(" Compte Administrateur créé (superyoka).");
     } else {
-      console.log(' Le compte [superyoka] existe déjà. Initialisation ignorée.');
+      userId = rows[0].id;
+      // S'assurer que le superadmin est actif et rattaché à l'établissement 1
+      await db.query('UPDATE utilisateurs SET statut = 1, etablissement_id = 1 WHERE id = ?', [userId]);
     }
 
-    // 2. Initialisation de l'ADMIN CAMPUS (admin_campus)
-    const [adminCampusRows] = await db.execute(
-      'SELECT id FROM utilisateurs WHERE identifiant = ?', 
-      ['admin_campus']
-    );
-
-    if (adminCampusRows.length === 0) {
-      const [etabs] = await db.execute('SELECT id FROM etablissements LIMIT 1');
-      const etablissement_id = etabs.length > 0 ? etabs[0].id : null;
-
-      const [resUser] = await db.execute(
-        'INSERT INTO utilisateurs (etablissement_id, identifiant, mot_de_passe, nom, prenom) VALUES (?, ?, ?, ?, ?)',
-        [etablissement_id, 'admin_campus', hashedPass, 'Admin', 'Campus']
+    // 3. S'assurer que le rôle SUPERADMIN est bien attribué
+    const [roleRows] = await db.query('SELECT id FROM roles WHERE nom_role = ?', ['SUPERADMIN']);
+    
+    if (roleRows && roleRows.length > 0) {
+      const roleId = roleRows[0].id;
+      await db.query(
+        'INSERT OR IGNORE INTO utilisateur_roles (utilisateur_id, role_id) VALUES (?, ?)',
+        [userId, roleId]
       );
-
-      const [resRole] = await db.execute('SELECT id FROM roles WHERE nom_role = ?', ['ADMIN']);
-      if (resRole.length > 0) {
-        await db.execute(
-          'INSERT INTO utilisateur_roles (utilisateur_id, role_id) VALUES (?, ?)',
-          [resUser.insertId, resRole[0].id]
-        );
-      }
-      console.log(' Compte [admin_campus] créé avec succès.');
-    } else {
-      console.log(' Le compte [admin_campus] existe déjà. Initialisation ignorée.');
     }
 
-  } catch (error) {
-    console.error(" Erreur lors de l'initialisation des administrateurs :", error);
+    console.log(" Sécurités et compte Superadmin vérifiés avec succès.");
+
+  } catch (err) {
+    console.error(" Erreur lors de la réinitialisation du superadmin :", err.message);
   }
 }
 
-// Lancement du serveur
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, async () => {
-  const url = `http://localhost:${PORT}`;
-  console.log(`Le serveur tourne sur : ${url}`);
-  
-  // 1. Exécution du script de seeding au démarrage
-  await initialiserAdministrateurs();
+// ------------------------------------------------------------------
+// DÉMARRAGE DU SERVEUR
+// ------------------------------------------------------------------
+async function demarrerServeur() {
+  try {
+    console.log(" Initialisation de la base de données...");
+    await db.initDb();
 
-  // 2. Ouverture automatique du navigateur par défaut sous Windows
-  exec(`start ${url}`);
-});
+    console.log(" Vérification des comptes administrateurs...");
+    await initialiserAdministrateurs();
+
+    const PORT = process.env.PORT || 3000;
+    
+    app.listen(PORT, () => {
+      const url = `http://localhost:${PORT}`;
+      console.log(` Le serveur tourne sur : ${url}`);
+
+      // --- OUVERTURE AUTOMATIQUE DU NAVIGATEUR ---
+      // Commande adaptée selon le système d'exploitation (Windows, macOS, Linux)
+      const startCmd = process.platform === 'win32' ? `start ${url}` :
+                       process.platform === 'darwin' ? `open ${url}` : `xdg-open ${url}`;
+      
+      exec(startCmd, (err) => {
+        if (err) {
+          console.error(" Impossible d'ouvrir le navigateur automatiquement :", err.message);
+        }
+      });
+    });
+
+  } catch (error) {
+    console.error(" Erreur critique au démarrage du serveur :", error);
+    process.exit(1);
+  }
+}
+
+// ⚠️ APPEL EXPLICIT DE LA FONCTION POUR LANCER LE SERVEUR
+demarrerServeur();
