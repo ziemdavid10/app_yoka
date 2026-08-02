@@ -145,24 +145,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { loginService } from '../services/authService';
-
-const loadGoogleIconsFont = () => {
-  if (document.getElementById('material-symbols-font')) return;
-  const link = document.createElement('link');
-  link.id = 'material-symbols-font';
-  link.rel = 'stylesheet';
-  link.href = 'https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,-50..200&family=Inter:wght@400;500;600;700;800&display=swap';
-  document.head.appendChild(link);
-};
-
-const Icon = ({ name, style = {}, filled = false }) => (
-  <span
-    className="material-symbols-outlined"
-    style={{ fontVariationSettings: `'FILL' ${filled ? 1 : 0}`, ...style }}
-  >
-    {name}
-  </span>
-);
+import Icon from '../components/icons';
 
 const Login = () => {
   const navigate = useNavigate();
@@ -176,10 +159,6 @@ const Login = () => {
   const [erreur, setErreur] = useState('');
   const [chargement, setChargement] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-
-  React.useEffect(() => {
-    loadGoogleIconsFont();
-  }, []);
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -381,14 +360,6 @@ const CSS = `
     background: #f4f6fa;
   }
 
-  .material-symbols-outlined {
-    font-family: 'Material Symbols Outlined';
-    font-weight: normal; font-style: normal; font-size: 20px; line-height: 1;
-    letter-spacing: normal; text-transform: none; display: inline-flex;
-    white-space: nowrap; word-wrap: normal; direction: ltr; -webkit-font-smoothing: antialiased;
-    flex-shrink: 0;
-  }
-
   .yk-spin { animation: yk-spin 1s linear infinite; }
   @keyframes yk-spin { to { transform: rotate(360deg); } }
 
@@ -436,7 +407,7 @@ const CSS = `
   .yk-aside-points li {
     display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: #cbd5e1; font-weight: 500;
   }
-  .yk-aside-points .material-symbols-outlined { color: #34d399; font-size: 19px; }
+  .yk-aside-points svg { color: #34d399; font-size: 19px; }
 
   .yk-aside-footer { font-size: 11.5px; color: #64748b; position: relative; z-index: 1; }
 
@@ -477,7 +448,7 @@ const CSS = `
     background: #fbfcfe; transition: border-color 0.15s ease, box-shadow 0.15s ease;
   }
   .yk-input-wrap:focus-within { border-color: #94a3b8; box-shadow: 0 0 0 3px rgba(67, 56, 202, 0.10); background: #fff; }
-  .yk-input-wrap .material-symbols-outlined { color: var(--yk-muted); }
+  .yk-input-wrap svg { color: var(--yk-muted); }
 
   .yk-input {
     border: none; outline: none; background: transparent;

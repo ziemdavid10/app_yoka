@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
-// Ajout des imports requis pour les graphiques Recharts
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-// Génération de PDF côté client (npm install jspdf jspdf-autotable)
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import Icon from '../components/icons';
 
 import { fetchEleves, saveEleve, updateEleve, deleteEleve, importElevesExcel } from '../services/eleveService';
 import { fetchClasses, saveClasse, updateClasse, deleteClasse, fetchTranches, saveTranches } from '../services/classeService';
@@ -63,7 +62,7 @@ export const AdminLocalChart = ({ data = localDataMock }) => {
   return (
     <div style={{ width: '100%', height: 340, background: '#fff', padding: '20px', borderRadius: '12px', border: '1px solid #e6e9ef', marginTop: '24px' }}>
       <h4 style={{ margin: '0 0 16px 0', fontSize: '14px', fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <span className="material-symbols-outlined" style={{ color: '#0369a1' }}>analytics</span>
+        <Icon name="analytics" style={{ color: '#0369a1' }} />
         Analyse Mensuelle : Flux de Trésorerie (F CFA)
       </h4>
       <ResponsiveContainer width="100%" height="85%">
@@ -80,25 +79,6 @@ export const AdminLocalChart = ({ data = localDataMock }) => {
     </div>
   );
 };
-
-// Icônes Material Symbols (Google Fonts)
-const loadGoogleIconsFont = () => {
-  if (document.getElementById('material-symbols-font')) return;
-  const link = document.createElement('link');
-  link.id = 'material-symbols-font';
-  link.rel = 'stylesheet';
-  link.href = 'https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,-50..200&family=Inter:wght@400;500;600;700;800&display=swap';
-  document.head.appendChild(link);
-};
-
-const Icon = ({ name, style = {}, filled = false }) => (
-  <span
-    className="material-symbols-outlined"
-    style={{ fontVariationSettings: `'FILL' ${filled ? 1 : 0}`, ...style }}
-  >
-    {name}
-  </span>
-);
 
 const NAV_ITEMS = [
   { key: 'dashboard', label: 'Tableau de bord', icon: 'monitoring' },
@@ -368,7 +348,6 @@ const AdminDashboard = () => {
 
   // 3. HOOKS D'EFFET
   useEffect(() => {
-    loadGoogleIconsFont();
     chargerDonnees();
   }, []);
 
@@ -1889,21 +1868,6 @@ const CSS = `
     color: var(--yk-ink);
   }
 
-  .material-symbols-outlined {
-    font-family: 'Material Symbols Outlined';
-    font-weight: normal;
-    font-style: normal;
-    font-size: 20px;
-    line-height: 1;
-    letter-spacing: normal;
-    text-transform: none;
-    display: inline-flex;
-    white-space: nowrap;
-    word-wrap: normal;
-    direction: ltr;
-    -webkit-font-smoothing: antialiased;
-  }
-
   .yk-sidebar {
     width: 264px;
     flex-shrink: 0;
@@ -1994,7 +1958,7 @@ const CSS = `
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 10px; padding: 80px 0; color: var(--yk-muted); font-size: 14px;
   }
-  .yk-loading .material-symbols-outlined { animation: yk-spin 1.1s linear infinite; }
+  .yk-loading svg { animation: yk-spin 1.1s linear infinite; }
   @keyframes yk-spin { to { transform: rotate(360deg); } }
 
   .yk-alert {

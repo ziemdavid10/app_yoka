@@ -7,8 +7,12 @@ const path = require('path');
 const fs = require('fs'); 
 const { exec } = require('child_process');
 
+//  AJOUT BACKUP : Importation du service et des routes de sauvegarde
+const backupRoutes = require('./src/routes/backupRoutes');
+const { initialiserPlanificateurSauvegarde } = require('./src/services/backupService');
+
 // ------------------------------------------------------------------
-// 0. CAPTURE SÉCURISÉE DES ERREURS GLOBALES (Évite les crashs silencieux)
+// 0. CAPTURE SÉCURISÉE DES ERREURS GLOBALES
 // ------------------------------------------------------------------
 process.on('uncaughtException', (err) => {
   console.error(' Erreur non capturée (uncaughtException) :', err);
@@ -48,6 +52,9 @@ app.use('/api/etablissements', etablissementRoutes);
 app.use('/api/annees-scolaires', anneeScolaireRoutes);
 app.use('/api/parametres', parametresRoutes);
 
+//  AJOUT BACKUP : Déclaration du point d'accès pour les sauvegardes
+app.use('/api/backups', backupRoutes);
+
 // ------------------------------------------------------------------
 // GESTION DU FRONTEND REACT
 // ------------------------------------------------------------------
@@ -80,10 +87,8 @@ app.use((req, res, next) => {
 // ------------------------------------------------------------------
 async function initialiserAdministrateurs() {
   try {
-    // 1. S'assurer que l'établissement principal (ID = 1) est TOUJOURS ACTIF
     await db.query('UPDATE etablissements SET statut = 1 WHERE id = 1');
 
-    // 2. Vérifier si superyoka existe
     const [rows] = await db.query('SELECT id FROM utilisateurs WHERE identifiant = ?', ['superyoka']);
     let userId;
 
@@ -99,11 +104,9 @@ async function initialiserAdministrateurs() {
       console.log(" Compte Administrateur créé (superyoka).");
     } else {
       userId = rows[0].id;
-      // S'assurer que le superadmin est actif et rattaché à l'établissement 1
       await db.query('UPDATE utilisateurs SET statut = 1, etablissement_id = 1 WHERE id = ?', [userId]);
     }
 
-    // 3. S'assurer que le rôle SUPERADMIN est bien attribué
     const [roleRows] = await db.query('SELECT id FROM roles WHERE nom_role = ?', ['SUPERADMIN']);
     
     if (roleRows && roleRows.length > 0) {
@@ -132,14 +135,16 @@ async function demarrerServeur() {
     console.log(" Vérification des comptes administrateurs...");
     await initialiserAdministrateurs();
 
+    //  AJOUT BACKUP : Lancement de la planification en arrière-plan
+    console.log(" Démarrage du service de sauvegarde automatique...");
+    initialiserPlanificateurSauvegarde();
+
     const PORT = process.env.PORT || 3000;
     
     app.listen(PORT, () => {
       const url = `http://localhost:${PORT}`;
       console.log(` Le serveur tourne sur : ${url}`);
 
-      // --- OUVERTURE AUTOMATIQUE DU NAVIGATEUR ---
-      // Commande adaptée selon le système d'exploitation (Windows, macOS, Linux)
       const startCmd = process.platform === 'win32' ? `start ${url}` :
                        process.platform === 'darwin' ? `open ${url}` : `xdg-open ${url}`;
       
@@ -156,5 +161,4 @@ async function demarrerServeur() {
   }
 }
 
-// ⚠️ APPEL EXPLICIT DE LA FONCTION POUR LANCER LE SERVEUR
 demarrerServeur();

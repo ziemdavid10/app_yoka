@@ -1,49 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { AuditLogDashboard } from '../components/AuditLogDashboard';
-// import StatusBadge from "../components/StatusBadge";
+import Icon from '../components/icons';
 
 // Importation des services backend
 import { fetchEtablissements, saveEtablissement, fetchAdminsSysteme } from '../services/etablissementService';
 import { fetchAnneesScolaires, saveAnneeScolaire, activerAnneeScolaire } from '../services/anneeScolaireService';
 
-// ---------------------------------------------------------------------------
-// CONTRAT D'API BACKEND (Endpoints requis) :
-//   PATCH  /api/etablissements/:id           (Modifier établissement)
-//   PATCH  /api/etablissements/:id/statut    (Activer/Désactiver)
-//   DELETE /api/etablissements/:id           (Supprimer)
-//   POST   /api/auth/register                (Créer admin + mdp temporaire)
-//   PATCH  /api/auth/admins/:id              (Modifier admin)
-//   PATCH  /api/auth/admins/:id/statut       (Activer/Désactiver admin)
-//   PATCH  /api/auth/admins/:id/reinitialiser-mot-de-passe
-//   DELETE /api/auth/admins/:id
-//   GET    /api/annees-scolaires             (Lister)
-//   POST   /api/annees-scolaires             (Créer, inactive par défaut)
-//   PATCH  /api/annees-scolaires/:id/activer (Activer — désactive les autres)
-//   PUT    /api/parametres
-// ---------------------------------------------------------------------------
-
-// 1. UTILITAIRE : Chargement dynamique des icônes et polices Google
-const loadGoogleIconsFont = () => {
-  if (document.getElementById('material-symbols-font')) return;
-  const link = document.createElement('link');
-  link.id = 'material-symbols-font';
-  link.rel = 'stylesheet';
-  link.href = 'https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,-50..200&family=Inter:wght@400;500;600;700;800&display=swap';
-  document.head.appendChild(link);
-};
-
-// 2. COMPOSANT : Icône Material
-const Icon = ({ name, style = {}, filled = false }) => (
-  <span
-    className="material-symbols-outlined"
-    style={{ fontVariationSettings: `'FILL' ${filled ? 1 : 0}`, ...style }}
-  >
-    {name}
-  </span>
-);
-
-// 3. UTILITAIRES : Mots de passe, Presse-papiers & Dates
+// UTILITAIRES : Mots de passe, Presse-papiers & Dates
 const genererMotDePasseTemporaire = () => {
   const majuscules = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
   const minuscules = 'abcdefghijkmnpqrstuvwxyz';
@@ -283,7 +247,6 @@ export default function SuperAdminDashboard() {
   };
 
   useEffect(() => {
-    loadGoogleIconsFont();
     chargerDonneesSysteme();
     chargerAnnees();
     chargerParametres();
